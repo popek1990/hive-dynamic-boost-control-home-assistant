@@ -1,0 +1,134 @@
+alias: "[HIVE] Boost – dynamiczne sterowanie wg temperatury"
+description: >
+  Czas trwania Boost zależy od temperatury:
+  <21°C → 10 min, 21–22°C → 7 min, 22–22.5°C → 5 min,
+  22.5–23°C → 3 min, >23°C → Boost zablokowany.
+mode: single
+
+trigger:
+  - platform: state
+    entity_id: binary_sensor.thermostat_1_boost
+    to: "on"
+
+action:
+  - variables:
+      temp: "{{ states('sensor.thermostat_1_current_temperature') | float(0) }}"
+
+  # Wspólny log startu
+  - service: logbook.log
+    data:
+      name: "[HIVE] Boost"
+      message: "Aktywacja @ {{ temp }}°C"
+      entity_id: climate.thermostat_1
+
+  - service: system_log.write
+    data:
+      message: "[HIVE] Boost aktywacja @ {{ temp }}°C"
+      level: info
+
+  - service: shell_command.boost_history_log
+    data:
+      message: "[HIVE] Boost aktywacja @ {{ temp }}°C"
+
+  - choose:
+      # >23°C — zablokowany
+      - conditions:
+          - condition: numeric_state
+            entity_id: sensor.thermostat_1_current_temperature
+            above: 23
+        sequence:
+          - service: hive.boost_heating_off
+            target:
+              entity_id: climate.thermostat_1
+          - service: system_log.write
+            data:
+              message: "[HIVE] Boost zablokowany (>23°C)"
+              level: info
+          - service: shell_command.boost_history_log
+            data:
+              message: "[HIVE] Boost zablokowany (>23°C)"
+          - service: persistent_notification.create
+            data:
+              title: "Boost zablokowany"
+              message: "Nie włączono Boost – temperatura powyżej 23°C."
+
+      # 22.5–23°C → 3 min
+      - conditions:
+          - condition: template
+            value_template: "{{ 22.5 <= temp < 23 }}"
+        sequence:
+          - delay: "00:03:00"
+          - service: hive.boost_heating_off
+            target:
+              entity_id: climate.thermostat_1
+          - service: system_log.write
+            data:
+              message: "[HIVE] Boost OFF po 3 min ({{ temp }}°C)"
+              level: info
+          - service: shell_command.boost_history_log
+            data:
+              message: "[HIVE] Boost OFF po 3 min ({{ temp }}°C)"
+          - service: persistent_notification.create
+            data:
+              title: "Boost skrócony"
+              message: "Temperatura 22.5–23°C – Boost wyłączony po 3 min."
+
+      # 22–22.5°C → 5 min
+      - conditions:
+          - condition: template
+            value_template: "{{ 22 <= temp < 22.5 }}"
+        sequence:
+          - delay: "00:05:00"
+          - service: hive.boost_heating_off
+            target:
+              entity_id: climate.thermostat_1
+          - service: system_log.write
+            data:
+              message: "[HIVE] Boost OFF po 5 min ({{ temp }}°C)"
+              level: info
+          - service: shell_command.boost_history_log
+            data:
+              message: "[HIVE] Boost OFF po 5 min ({{ temp }}°C)"
+          - service: persistent_notification.create
+            data:
+              title: "Boost skrócony"
+              message: "Temperatura 22–22.5°C – Boost wyłączony po 5 min."
+
+      # 21–22°C → 7 min
+      - conditions:
+          - condition: template
+            value_template: "{{ 21 <= temp < 22 }}"
+        sequence:
+          - delay: "00:07:00"
+          - service: hive.boost_heating_off
+            target:
+              entity_id: climate.thermostat_1
+          - service: system_log.write
+            data:
+              message: "[HIVE] Boost OFF po 7 min ({{ temp }}°C)"
+              level: info
+          - service: shell_command.boost_history_log
+            data:
+              message: "[HIVE] Boost OFF po 7 min ({{ temp }}°C)"
+          - service: persistent_notification.create
+            data:
+              title: "Boost skrócony"
+              message: "Temperatura 21–22°C – Boost wyłączony po 7 min."
+
+    default:
+      # <21°C → 10 min
+      - delay: "00:10:00"
+      - service: hive.boost_heating_off
+        target:
+          entity_id: climate.thermostat_1
+      - service: system_log.write
+        data:
+          message: "[HIVE] Boost OFF po 10 min ({{ temp }}°C)"
+          level: info
+      - service: shell_command.boost_history_log
+        data:
+          message: "[HIVE] Boost OFF po 10 min ({{ temp }}°C)"
+      - service: persistent_notification.create
+        data:
+          title: "Boost wyłączony"
+          message: "Temperatura <21°C – Boost wyłączony po 10 min."
