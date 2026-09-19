@@ -35,7 +35,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from messages import Locale, known_languages, make_locale
 
-VERSION = "2.0"
+VERSION = "2.0.1"
 DIRECTORY = Path(__file__).resolve().parent
 ENV_FILE = DIRECTORY / ".env"
 STATE_FILE = DIRECTORY / "state.json"
@@ -107,7 +107,13 @@ class Config:
     hysteresis_c: float = 0.3           # how far it must drop before the alarm re-arms
     poll_sec: int = 60
     repeat_min: int = 180               # remind while still too warm (0 = never remind)
-    stale_sensor_min: int = 45          # Hive sensor not refreshing = warning
+    # Hive writes a new state only when the value actually changes, so a steady house
+    # looks like a silent sensor. Measured on a real install: over 30 days the median gap
+    # between changes was 16 min, but 12 gaps were longer than 3 h and the longest was 7.5 h
+    # - every one of them a genuinely stable house, not an outage. 45 min would have cried
+    # wolf 87 times in a week. 8 h still catches a frozen integration or a hung Home
+    # Assistant (those last many hours) without crying wolf at all.
+    stale_sensor_min: int = 480
     ha_down_min: int = 10               # no contact with HA = warning
     health_port: int = 8099             # /health, bound to localhost only
     notify_on_start: bool = True        # a message after boot proves the service came back
@@ -194,7 +200,7 @@ class Config:
             hysteresis_c=number("BOT_HYSTERESIS_C", 0.3),
             poll_sec=int(number("BOT_POLL_SEC", 60)),
             repeat_min=int(number("BOT_REPEAT_MIN", 180)),
-            stale_sensor_min=int(number("BOT_STALE_SENSOR_MIN", 45)),
+            stale_sensor_min=int(number("BOT_STALE_SENSOR_MIN", 480)),
             ha_down_min=int(number("BOT_HA_DOWN_MIN", 10)),
             health_port=int(number("BOT_HEALTH_PORT", 8099)),
             notify_on_start=flag("BOT_NOTIFY_ON_START", True),
@@ -777,15 +783,23 @@ class Bot:
             ]))
 
     def check_sensor_freshness(self, temperature: float | None, age_min: float) -> None:
-        stale = temperature is None or age_min >= self.config.stale_sensor_min
+        brak_danych = temperature is None
+        stale = brak_danych or age_min >= self.config.stale_sensor_min
         if stale and not self.state.reported_stale_sensor:
             self.state.reported_stale_sensor = True
             self.save()
-            reason = (self.t("sensor_stale_unavailable") if temperature is None
-                      else self.t("sensor_stale_age", age=self.locale.duration(age_min),
-                                  temperature=self.locale.number(temperature)))
-            self.send("\n".join([self.t("sensor_stale_header"), reason,
-                                 self.t("sensor_stale_note")]))
+            # Two different situations, so two different messages: the sensor saying
+            # "unavailable" is a fault, while an unchanged value may be a calm house.
+            if brak_danych:
+                lines = [self.t("sensor_unavailable_header"),
+                         self.t("sensor_stale_unavailable"),
+                         self.t("sensor_stale_note")]
+            else:
+                lines = [self.t("sensor_unchanged_header"),
+                         self.t("sensor_stale_age", age=self.locale.duration(age_min),
+                                temperature=self.locale.number(temperature)),
+                         self.t("sensor_unchanged_note")]
+            self.send("\n".join(lines))
         elif not stale and self.state.reported_stale_sensor:
             self.state.reported_stale_sensor = False
             self.save()

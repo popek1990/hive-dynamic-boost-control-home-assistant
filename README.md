@@ -58,6 +58,11 @@ every minute), commands for the numbers you actually want, a health check that t
 Home Assistant or the Hive cloud stops answering, and a systemd unit so it comes back after a
 reboot. Standard library only: no pip install, no virtualenv, no container.
 
+Its watchdog thresholds are measured, not guessed: because Hive only reports a value when it
+changes, a steady house is indistinguishable from a silent sensor, so the "stale reading" warning
+waits 8 hours by default — on 30 days of real data, 45 minutes would have fired 87 times in one
+week with nothing wrong.
+
 **A paper trail** — one log line per Boost decision, a temperature sample every 15 minutes,
 and a record of who changed the thermostat and when. This is what makes a heating bill
 arguable instead of mysterious.

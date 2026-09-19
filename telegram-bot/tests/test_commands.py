@@ -445,6 +445,37 @@ class TestAlerts(unittest.TestCase):
         instance.check_temperature()
         self.assertIn("restored", instance.tg.last)
 
+    def _freeze_reading(self, instance, minutes, value="22.6"):
+        instance.ha.values[instance.entity["temperature"]] = {
+            "state": value,
+            "last_changed": (instance.clock - timedelta(minutes=minutes)).isoformat(),
+            "attributes": {}}
+
+    def test_a_steady_house_is_not_an_alarm(self):
+        # Hive only writes a new value when it changes. Measured on a real install: gaps of
+        # three hours happen a dozen times a month with nothing wrong, so they must stay quiet.
+        instance = make_bot("en")
+        self.assertEqual(instance.config.stale_sensor_min, 480, "default measured, not guessed")
+        instance.ha = FakeHA(states=entities(instance))
+        for minutes in (46, 120, 300, 479):
+            self._freeze_reading(instance, minutes)
+            instance.check_temperature()
+            self.assertEqual(instance.tg.sent, [],
+                             f"unchanged for {minutes} min must not raise an alarm")
+
+    def test_an_unavailable_sensor_is_a_different_message_than_a_frozen_one(self):
+        frozen = make_bot("en")
+        frozen.ha = FakeHA(states=entities(frozen))
+        self._freeze_reading(frozen, 600)
+        frozen.check_temperature()
+        self.assertIn("has not moved", frozen.tg.last)
+        self.assertIn("22.6 °C", frozen.tg.last, "say what it is stuck at")
+
+        gone = make_bot("en")
+        gone.ha = FakeHA(states=entities(gone, temperature="unavailable"))
+        gone.check_temperature()
+        self.assertIn("reports no data", gone.tg.last)
+
     def test_a_stale_sensor_is_reported_once_and_then_cleared(self):
         instance = make_bot("en", stale_sensor_min=45)
         instance.ha = FakeHA(states=entities(instance))
@@ -454,7 +485,7 @@ class TestAlerts(unittest.TestCase):
             "last_changed": (instance.clock - timedelta(minutes=90)).isoformat(),
             "attributes": {}}
         instance.check_temperature()
-        self.assertIn("stopped refreshing", instance.tg.last)
+        self.assertIn("has not moved", instance.tg.last)
         count = len(instance.tg.sent)
         instance.check_temperature()
         self.assertEqual(len(instance.tg.sent), count, "do not repeat the same warning")
@@ -468,6 +499,7 @@ class TestAlerts(unittest.TestCase):
         instance.ha = FakeHA(states=entities(instance, temperature="unavailable"))
         instance.check_temperature()
         self.assertIn("unavailable", instance.tg.last)
+        self.assertIn("reports no data", instance.tg.last)
 
     def test_the_daily_alert_counter_resets_with_the_date(self):
         self.set_temperature(23.4)

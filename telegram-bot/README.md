@@ -42,6 +42,7 @@ ones worth knowing:
 | `BOT_THRESHOLD_C` | `23.0` | the alert threshold; `/threshold` changes it at runtime. |
 | `BOT_HYSTERESIS_C` | `0.3` | how far it must fall before the alarm re-arms. |
 | `BOT_REPEAT_MIN` | `180` | reminder while still too warm; `0` disables reminders. |
+| `BOT_STALE_SENSOR_MIN` | `480` | warn when the reading has not changed for this long - see below. |
 | `BOT_GAP_STITCH_MIN` | `5` | Hive drops out for a minute or two; gaps shorter than this count as one run. |
 | `BOT_ENTITY_*` | Hive defaults | if your entity ids differ. |
 | `BOT_HW_SCHEDULE_TEXT` | empty | your hot-water window in words, shown by `/water`. |
@@ -69,8 +70,16 @@ muted still alerts you afterwards if it is still too warm.
 The bot watches the house; two things watch the bot.
 
 - **Its own health**: it warns you when Home Assistant stops answering for `BOT_HA_DOWN_MIN`
-  minutes, and when the Hive sensor has not refreshed for `BOT_STALE_SENSOR_MIN` minutes — the
-  common case where everything looks fine but the data is hours old.
+  minutes, and when the temperature reading has not changed for `BOT_STALE_SENSOR_MIN` minutes —
+  the case where everything looks fine but the data is stale.
+
+  A word on that second one: Hive writes a new state **only when the value changes**, so there is
+  no heartbeat to watch (`last_reported` does not move either). A quiet reading therefore means
+  either a calm house or a frozen integration, and only the length of the silence tells them
+  apart. On a real install, measured over 30 days: median gap between changes 16 minutes, twelve
+  gaps longer than 3 hours, longest 7.5 hours — every one of them a stable house. That is why the
+  default is 8 hours; a hung Home Assistant or a dead integration lasts much longer, and an
+  `unavailable` sensor is reported immediately instead, as a separate message.
 - **`watchdog.sh` from cron**: asks `http://127.0.0.1:8099/health` and messages you directly if
   the bot is not answering — because a dead bot cannot report itself. It reports once per outage
   and once on recovery.

@@ -3,6 +3,20 @@
 All notable changes to this project are documented here.
 This project follows [Semantic Versioning](https://semver.org/).
 
+## [2.0.1] - 2026-09-19
+
+### Fixed
+- The "stale sensor" warning fired on a perfectly healthy install. Hive writes a new state only
+  when the value changes — `last_reported` does not advance either — so a house sitting at one
+  temperature is indistinguishable from a silent sensor. Measured over 30 days on a live install:
+  median gap between changes 16 min, twelve gaps over 3 h, longest 7.5 h, all of them a calm
+  house. The old 45-minute default would have alerted 87 times in a single week.
+  `BOT_STALE_SENSOR_MIN` now defaults to **480** (8 hours), which still catches a frozen
+  integration or a hung Home Assistant, since those last far longer.
+- An `unavailable` sensor and an unchanged reading are now two different messages instead of one
+  that claimed the sensor had stopped refreshing. The unchanged one says what value it is stuck
+  at and that a steady house looks the same.
+
 ## [2.0.0] - 2026-09-19
 
 ### Added
@@ -56,5 +70,6 @@ This project follows [Semantic Versioning](https://semver.org/).
 Initial public version: the dynamic Boost automation (`automations.yaml`) and a README.
 Tagged on 2026-09-18 as a rollback point before the 2.0.0 work started.
 
+[2.0.1]: https://github.com/popek1990/hive-dynamic-boost-control-home-assistant/releases/tag/v2.0.1
 [2.0.0]: https://github.com/popek1990/hive-dynamic-boost-control-home-assistant/releases/tag/v2.0.0
 [1.0.0]: https://github.com/popek1990/hive-dynamic-boost-control-home-assistant/releases/tag/v1.0.0

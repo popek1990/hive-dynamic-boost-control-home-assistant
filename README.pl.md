@@ -53,6 +53,11 @@ minutę), komendy z liczbami, które naprawdę są potrzebne, health check infor
 Assistant albo chmura Hive przestaje odpowiadać, i usługa systemd, żeby bot wracał po
 restarcie. Tylko biblioteka standardowa: bez `pip`, bez virtualenva, bez kontenera.
 
+Progi ostrzeżeń są zmierzone, nie wymyślone: Hive przysyła wartość tylko wtedy, gdy się zmieni,
+więc spokojny dom wygląda identycznie jak milczący czujnik. Dlatego ostrzeżenie „odczyt nie
+drgnął" czeka domyślnie 8 godzin — na 30 dniach prawdziwych danych próg 45 minut odezwałby się
+87 razy w jednym tygodniu, za każdym razem bez powodu.
+
 **Ślad na papierze** — jedna linia logu na każdą decyzję o Boost, próbka temperatury co 15 minut
 i zapis, kto i kiedy zmieniał termostat. To właśnie zamienia rachunek za ogrzewanie z tajemnicy
 w coś, o czym można dyskutować.
