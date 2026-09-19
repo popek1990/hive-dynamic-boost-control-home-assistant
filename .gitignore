@@ -1,0 +1,74 @@
+# ============================================================================
+#  Nothing in this list may ever reach the public repository.
+#  Secrets, live data, and private notes stay on the owner's machine.
+# ============================================================================
+
+# --- Secrets and local configuration ---
+.env
+.env.*
+!.env.example
+*.token
+*_token
+.gh_token
+secrets.yaml
+credentials.*
+*.pem
+*.key
+*.env
+
+# --- Bot runtime state (contains the Telegram chat id) ---
+stan.json
+state.json
+telegram-bot/stan.json
+telegram-bot/state.json
+*.tmp
+stan.*
+state.*
+
+# --- Live data from the installation (occupancy, temperatures, logs) ---
+*.log
+*.csv
+/logs/
+boost_history.log
+home-assistant_v2.db*
+*.db
+*.db-*
+*.sqlite*
+.storage/
+*.bak
+*.bak.*
+*.zip
+*.tar
+*.tar.*
+*.tgz
+*.gz
+
+# Examples for the documentation are allowed (they must be synthetic)
+!docs/**/*.example.log
+!docs/**/*.example.csv
+
+# --- Private working notes, plans and session handoffs ---
+prompt.md
+prompt-*.md
+plan-repo-*.md
+obserwacje.md
+CLAUDE.md
+AGENTS_homeassistant.md
+private/
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# --- Editors and systems ---
+.vscode/
+.idea/
+.DS_Store
+*.swp
+
+# --- Local, environment-specific secret patterns (never committed) ---
+tools/check-secrets.local
+.watchdog-reported

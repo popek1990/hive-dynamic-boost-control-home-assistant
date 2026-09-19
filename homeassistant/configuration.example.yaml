@@ -1,0 +1,28 @@
+# ---------------------------------------------------------------------------------
+#  The pieces this project needs in configuration.yaml.
+#
+#  Copy only what you need and merge it with your own file - YAML allows each
+#  top-level key (shell_command:, homeassistant:, ...) to appear only once, so
+#  add the entries under a key you already have instead of repeating the key.
+#
+#  Nothing here is secret. Keep tokens and passwords in secrets.yaml.
+# ---------------------------------------------------------------------------------
+
+# Required by the Boost automation: one append-only log line per Boost decision.
+# The file grows slowly (a line per Boost) and survives restarts and updates.
+#
+# The rendered value goes into a shell command, so it is filtered down to harmless
+# characters first: a shell_command can be called by any user or script in Home
+# Assistant with any text, and a quote in that text would otherwise escape the command.
+shell_command:
+  boost_history_log: >
+    bash -c 'echo "$(date "+%Y-%m-%d %H:%M:%S") - {{ message | regex_replace(find="[^\w \[\].,:;/()°=+>-]", replace="") }}" >> /config/boost_history.log'
+
+# Option A - load the whole heating package (hot water schedule, legionella cycle,
+# CSV loggers). Put packages/heating.yaml in /config/packages/.
+homeassistant:
+  packages: !include_dir_named packages
+
+# Option B - load the Boost automation as a plain file instead of the package.
+# Use this if you only want the automation and nothing else.
+# automation manual: !include_dir_list automations/

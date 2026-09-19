@@ -1,0 +1,159 @@
+# ---------------------------------------------------------------------------------
+#  Dynamic Hive Boost control
+#
+#  Hive's Boost button always heats for a fixed 30 minutes, whatever the room
+#  temperature is. This automation cuts that short: the warmer the house already
+#  is, the less Boost it gets - and above the cut-off it is cancelled immediately.
+#
+#      below 21 °C   ->  10 minutes
+#      21 - 22 °C    ->   7 minutes
+#      22 - 22.5 °C  ->   5 minutes
+#      22.5 - 23 °C  ->   3 minutes
+#      23 °C and up  ->   blocked straight away
+#
+#  Every decision is written to the log file, the Home Assistant log and the
+#  logbook, so you can see afterwards who pressed Boost and what it cost.
+#
+#  Where to put this file:
+#      /config/automations/hive_boost_dynamic.yaml   (and include it, see below)
+#  or paste the body into Settings -> Automations -> Create -> Edit in YAML.
+#
+#  In configuration.yaml:
+#      automation manual: !include_dir_list automations/
+#  See configuration.example.yaml for the shell_command this needs.
+# ---------------------------------------------------------------------------------
+
+- id: hive_boost_dynamic
+  alias: "[HIVE] Boost - dynamic control by temperature"
+  description: >
+    Boost duration depends on the current temperature:
+    below 21 °C -> 10 min, 21-22 °C -> 7 min, 22-22.5 °C -> 5 min,
+    22.5-23 °C -> 3 min, 23 °C and above -> Boost blocked.
+  mode: single
+
+  trigger:
+    - platform: state
+      entity_id: binary_sensor.thermostat_1_boost
+      to: "on"
+
+  action:
+    - variables:
+        temp: "{{ states('sensor.thermostat_1_current_temperature') | float(0) }}"
+
+    # One entry for every Boost, whatever happens next.
+    - service: logbook.log
+      data:
+        name: "[HIVE] Boost"
+        message: "Activated at {{ temp }} °C"
+        entity_id: climate.thermostat_1
+
+    - service: system_log.write
+      data:
+        message: "[HIVE] Boost activated at {{ temp }} °C"
+        level: info
+
+    - service: shell_command.boost_history_log
+      data:
+        message: "[HIVE] Boost activated at {{ temp }} °C"
+
+    - choose:
+        # 23 °C and above - the house is warm enough, cancel the Boost now.
+        - conditions:
+            - condition: template
+              value_template: "{{ temp >= 23 }}"
+          sequence:
+            - service: hive.boost_heating_off
+              target:
+                entity_id: climate.thermostat_1
+            - service: system_log.write
+              data:
+                message: "[HIVE] Boost blocked (>= 23 °C)"
+                level: info
+            - service: shell_command.boost_history_log
+              data:
+                message: "[HIVE] Boost blocked (>= 23 °C)"
+            - service: persistent_notification.create
+              data:
+                title: "Boost blocked"
+                message: "Boost was not started - the house is already at or above 23 °C."
+
+        # 22.5 - 23 °C -> 3 minutes
+        - conditions:
+            - condition: template
+              value_template: "{{ 22.5 <= temp < 23 }}"
+          sequence:
+            - delay: "00:03:00"
+            - service: hive.boost_heating_off
+              target:
+                entity_id: climate.thermostat_1
+            - service: system_log.write
+              data:
+                message: "[HIVE] Boost off after 3 min ({{ temp }} °C)"
+                level: info
+            - service: shell_command.boost_history_log
+              data:
+                message: "[HIVE] Boost off after 3 min ({{ temp }} °C)"
+            - service: persistent_notification.create
+              data:
+                title: "Boost shortened"
+                message: "22.5-23 °C - Boost switched off after 3 minutes."
+
+        # 22 - 22.5 °C -> 5 minutes
+        - conditions:
+            - condition: template
+              value_template: "{{ 22 <= temp < 22.5 }}"
+          sequence:
+            - delay: "00:05:00"
+            - service: hive.boost_heating_off
+              target:
+                entity_id: climate.thermostat_1
+            - service: system_log.write
+              data:
+                message: "[HIVE] Boost off after 5 min ({{ temp }} °C)"
+                level: info
+            - service: shell_command.boost_history_log
+              data:
+                message: "[HIVE] Boost off after 5 min ({{ temp }} °C)"
+            - service: persistent_notification.create
+              data:
+                title: "Boost shortened"
+                message: "22-22.5 °C - Boost switched off after 5 minutes."
+
+        # 21 - 22 °C -> 7 minutes
+        - conditions:
+            - condition: template
+              value_template: "{{ 21 <= temp < 22 }}"
+          sequence:
+            - delay: "00:07:00"
+            - service: hive.boost_heating_off
+              target:
+                entity_id: climate.thermostat_1
+            - service: system_log.write
+              data:
+                message: "[HIVE] Boost off after 7 min ({{ temp }} °C)"
+                level: info
+            - service: shell_command.boost_history_log
+              data:
+                message: "[HIVE] Boost off after 7 min ({{ temp }} °C)"
+            - service: persistent_notification.create
+              data:
+                title: "Boost shortened"
+                message: "21-22 °C - Boost switched off after 7 minutes."
+
+      # below 21 °C -> the full 10 minutes
+      default:
+        - delay: "00:10:00"
+        - service: hive.boost_heating_off
+          target:
+            entity_id: climate.thermostat_1
+        - service: system_log.write
+          data:
+            message: "[HIVE] Boost off after 10 min ({{ temp }} °C)"
+            level: info
+        - service: shell_command.boost_history_log
+          data:
+            message: "[HIVE] Boost off after 10 min ({{ temp }} °C)"
+        - service: persistent_notification.create
+          data:
+            title: "Boost finished"
+            message: "Below 21 °C - Boost switched off after 10 minutes."
