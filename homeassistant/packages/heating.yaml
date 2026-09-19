@@ -1,0 +1,273 @@
+# =====================================================================================
+#  Heating and hot water package for a shared house
+#
+#  Target file: /config/packages/heating.yaml
+#  Needs this in configuration.yaml:
+#      homeassistant:
+#        packages: !include_dir_named packages
+#
+#  What it gives you:
+#    * a hot water schedule you can edit in the UI, applied to the Hive water heater,
+#    * a weekly legionella cycle that cannot be skipped by accident,
+#    * append-only CSV logs of temperature, thermostat changes and hot water events,
+#    * a copy of the Home Assistant core log kept after every restart.
+#
+#  IMPORTANT, read before pasting:
+#    - The times below are an EXAMPLE. Set your own, and read the note about
+#      legionella in the project README before shortening the heating window.
+#    - Every CSV this writes stays on your own machine. Those files show when
+#      people are home; do not publish them.
+#    - The entity ids are the ones the Hive integration created here
+#      (thermostat_1, hotwater). Check yours in Developer Tools -> States.
+# =====================================================================================
+
+# -------------------------------------------------------------------------------------
+# 0. RECORDER - history retention
+#
+#    Commented out on purpose: 'recorder:' may appear only ONCE across your whole
+#    configuration, and most installs already have it. If you do not, uncomment it.
+#    purge_keep_days: 365 keeps a year of history - useful for analysis, but the
+#    database will grow to several gigabytes.
+# -------------------------------------------------------------------------------------
+# recorder:
+#   purge_keep_days: 365
+#   commit_interval: 30
+#   exclude:
+#     domains: [update]
+#     entities:
+#       - sensor.sun_next_dawn
+#       - sensor.sun_next_dusk
+#       - sensor.sun_next_midnight
+#       - sensor.sun_next_noon
+#       - sensor.sun_next_rising
+#       - sensor.sun_next_setting
+#       - weather.forecast_home
+
+# -------------------------------------------------------------------------------------
+# 1. HELPER: the hot water schedule
+#    Editable in the UI: Settings -> Automations & scenes -> Schedules -> "Hot water".
+#    EXAMPLE window: 04:30-23:00 (quiet at night). Change it to suit the household.
+# -------------------------------------------------------------------------------------
+schedule:
+  hot_water:
+    name: Hot water
+    monday:    [{ from: "04:30:00", to: "23:00:00" }]
+    tuesday:   [{ from: "04:30:00", to: "23:00:00" }]
+    wednesday: [{ from: "04:30:00", to: "23:00:00" }]
+    thursday:  [{ from: "04:30:00", to: "23:00:00" }]
+    friday:    [{ from: "04:30:00", to: "23:00:00" }]
+    saturday:  [{ from: "04:30:00", to: "23:00:00" }]
+    sunday:    [{ from: "04:30:00", to: "23:00:00" }]
+
+# -------------------------------------------------------------------------------------
+# 2. PERMANENT CSV LOGS (append only, never rotated)
+#    The directory must exist: /config/logs
+#    Keep the boost_history_log from configuration.example.yaml - do NOT duplicate it here.
+# -------------------------------------------------------------------------------------
+# Values rendered from templates end up inside a shell command, so each one is filtered
+# down to harmless characters: a shell_command can be called by any user or script in
+# Home Assistant with any text, and a quote would otherwise escape the command.
+shell_command:
+  log_hotwater: >
+    bash -c 'echo "$(date "+%Y-%m-%d %H:%M:%S"),{{ event | regex_replace(find="[^\w \[\].,:;/()°=+>-]", replace="") }},{{ trigger | regex_replace(find="[^\w \[\].,:;/()°=+>-]", replace="") }}" >> /config/logs/hotwater.csv'
+  log_temperature: >
+    bash -c 'echo "$(date "+%Y-%m-%d %H:%M:%S"),{{ temp | regex_replace(find="[^\w \[\].,:;/()°=+>-]", replace="") }},{{ target | regex_replace(find="[^\w \[\].,:;/()°=+>-]", replace="") }},{{ mode | regex_replace(find="[^\w \[\].,:;/()°=+>-]", replace="") }},{{ action | regex_replace(find="[^\w \[\].,:;/()°=+>-]", replace="") }}" >> /config/logs/temperature.csv'
+  log_thermostat: >
+    bash -c 'echo "$(date "+%Y-%m-%d %H:%M:%S"),{{ what | regex_replace(find="[^\w \[\].,:;/()°=+>-]", replace="") }},{{ from_s | regex_replace(find="[^\w \[\].,:;/()°=+>-]", replace="") }},{{ to_s | regex_replace(find="[^\w \[\].,:;/()°=+>-]", replace="") }},{{ user | regex_replace(find="[^\w \[\].,:;/()°=+>-]", replace="") }}" >> /config/logs/thermostat_changes.csv'
+  # Keeps the core log after a restart, which is the only way to see what happened
+  # before a crash. Needs Home Assistant OS or Supervised ($SUPERVISOR_TOKEN);
+  # on Core/Container it does nothing, hence the guard.
+  #
+  # WARNING: these archives contain access tokens, internal addresses and user ids.
+  # Treat /config/logs as private. Old archives are deleted after 30 days.
+  # The token goes in through stdin, not the command line, where every process in the
+  # container could read it out of 'ps'.
+  archive_ha_log: >
+    bash -c 'if [ -n "$SUPERVISOR_TOKEN" ]; then printf "header = \"Authorization: Bearer %s\"\n" "$SUPERVISOR_TOKEN" | curl -s --config - http://supervisor/core/logs -o /config/logs/ha_core_$(date "+%Y%m%d_%H%M%S").log; find /config/logs -name "ha_core_*.log" -mtime +30 -delete; else echo "archive_ha_log: no SUPERVISOR_TOKEN, skipping"; fi'
+
+# -------------------------------------------------------------------------------------
+# 3. AUTOMATIONS
+# -------------------------------------------------------------------------------------
+automation:
+  # --- 3a. Hot water follows the schedule ---
+  - alias: "[HW] Hot water on schedule"
+    id: hive_hw_schedule
+    trigger:
+      - platform: state
+        entity_id: schedule.hot_water
+        to: "on"
+      - platform: state
+        entity_id: schedule.hot_water
+        to: "off"
+    condition:
+      - "{{ trigger.to_state.state in ['on','off'] }}"
+    action:
+      - choose:
+          - conditions: "{{ trigger.to_state.state == 'on' }}"
+            sequence:
+              - service: water_heater.turn_on
+                target: { entity_id: water_heater.thermostat_1 }
+              - service: shell_command.log_hotwater
+                data: { event: "ON", trigger: "schedule" }
+              - service: logbook.log
+                data:
+                  name: "[HW]"
+                  message: "Hot water ON (schedule)"
+                  entity_id: water_heater.thermostat_1
+        default:
+          - service: water_heater.turn_off
+            target: { entity_id: water_heater.thermostat_1 }
+          - service: shell_command.log_hotwater
+            data: { event: "OFF", trigger: "schedule" }
+          - service: logbook.log
+            data:
+              name: "[HW]"
+              message: "Hot water OFF (schedule)"
+              entity_id: water_heater.thermostat_1
+
+  # --- 3b. Put hot water back in step after a restart ---
+  #     Without this, a restart during a window leaves the boiler in whatever
+  #     state it happened to be in.
+  - alias: "[HW] Reconcile after Home Assistant start"
+    id: hive_hw_reconcile
+    trigger:
+      - platform: homeassistant
+        event: start
+    action:
+      - delay: "00:00:30"
+      - choose:
+          - conditions: "{{ is_state('schedule.hot_water','on') }}"
+            sequence:
+              - service: water_heater.turn_on
+                target: { entity_id: water_heater.thermostat_1 }
+              - service: shell_command.log_hotwater
+                data: { event: "ON", trigger: "reconcile_start" }
+        default:
+          - service: water_heater.turn_off
+            target: { entity_id: water_heater.thermostat_1 }
+          - service: shell_command.log_hotwater
+            data: { event: "OFF", trigger: "reconcile_start" }
+
+  # --- 3c. Temperature snapshot every 15 minutes (permanent CSV) ---
+  - alias: "[LOG] Temperature snapshot"
+    id: hive_log_temperature
+    trigger:
+      - platform: time_pattern
+        minutes: "/15"
+    condition:
+      # Skip Hive cloud blips, so the CSV stays usable for analysis.
+      - "{{ states('sensor.thermostat_1_current_temperature') not in ['unavailable','unknown'] }}"
+    action:
+      - service: shell_command.log_temperature
+        data:
+          temp:   "{{ states('sensor.thermostat_1_current_temperature') }}"
+          target: "{{ states('sensor.thermostat_1_target_temperature') }}"
+          mode:   "{{ states('sensor.thermostat_1_mode') }}"
+          action: "{{ state_attr('climate.thermostat_1','hvac_action') }}"
+
+  # --- 3d. Who changed the thermostat, and to what ---
+  #     mode: queued, because Hive changes several entities at once and the
+  #     default 'single' would silently drop the ones that arrive together.
+  - alias: "[MON] Thermostat change"
+    id: hive_mon_thermostat
+    mode: queued
+    max: 10
+    trigger:
+      - platform: state
+        entity_id:
+          - climate.thermostat_1
+          - sensor.thermostat_1_mode
+          - sensor.thermostat_1_target_temperature
+    condition:
+      - "{{ trigger.to_state.state not in ['unavailable','unknown'] }}"
+      - "{{ trigger.from_state.state not in ['unavailable','unknown'] }}"
+      - "{{ trigger.from_state.state != trigger.to_state.state }}"
+    action:
+      - service: shell_command.log_thermostat
+        data:
+          what:   "{{ trigger.entity_id }}"
+          from_s: "{{ trigger.from_state.state }}"
+          to_s:   "{{ trigger.to_state.state }}"
+          user:   "{{ trigger.to_state.context.user_id or 'system/cloud' }}"
+      # Notify only about a mode change or a switch-off, not about every target
+      # tweak, and reuse one notification id so they overwrite instead of piling up.
+      - choose:
+          - conditions:
+              - "{{ trigger.entity_id in ['climate.thermostat_1','sensor.thermostat_1_mode'] }}"
+            sequence:
+              - service: persistent_notification.create
+                data:
+                  notification_id: thermostat_change
+                  title: "Thermostat change"
+                  message: >
+                    {{ trigger.entity_id }}: {{ trigger.from_state.state }}
+                    -> {{ trigger.to_state.state }}
+                    ({{ trigger.to_state.context.user_id or 'system/cloud' }})
+
+  # --- 3e. Weekly legionella cycle: Sunday 02:00-04:00 ---
+  #     Hot water stored below 60 °C can grow legionella. Whatever else you do to
+  #     save gas, keep a cycle that heats the tank right through at least weekly.
+  #     This automation only switches hot water ON for two hours - it does NOT raise the
+  #     cylinder or boiler thermostat. Check separately that yours is set to 60 °C or more,
+  #     otherwise the cycle heats the tank to a temperature that does not kill legionella.
+  - alias: "[HW] Legionella cycle (Sunday)"
+    id: hive_hw_legionella
+    trigger:
+      - platform: time
+        at: "02:00:00"
+        id: "on"
+      - platform: time
+        at: "04:00:00"
+        id: "off"
+    condition:
+      - condition: time
+        weekday: [sun]
+    action:
+      - choose:
+          - conditions: "{{ trigger.id == 'on' }}"
+            sequence:
+              - service: water_heater.turn_on
+                target: { entity_id: water_heater.thermostat_1 }
+              - service: shell_command.log_hotwater
+                data: { event: "ON", trigger: "legionella" }
+              - service: logbook.log
+                data:
+                  name: "[HW]"
+                  message: "Legionella cycle ON"
+                  entity_id: water_heater.thermostat_1
+        default:
+          - service: water_heater.turn_off
+            target: { entity_id: water_heater.thermostat_1 }
+          - service: shell_command.log_hotwater
+            data: { event: "OFF", trigger: "legionella" }
+          - service: logbook.log
+            data:
+              name: "[HW]"
+              message: "Legionella cycle OFF"
+              entity_id: water_heater.thermostat_1
+
+  # --- 3f. Log every hot water Boost someone presses ---
+  - alias: "[LOG] Hot water Boost"
+    id: hive_log_hw_boost
+    trigger:
+      - platform: state
+        entity_id: binary_sensor.hotwater_boost
+    condition:
+      - "{{ trigger.to_state.state in ['on','off'] }}"
+      - "{{ trigger.from_state.state != trigger.to_state.state }}"
+    action:
+      - service: shell_command.log_hotwater
+        data:
+          event: "BOOST_{{ trigger.to_state.state }}"
+          trigger: "occupant"
+
+  # --- 3g. Keep the core log across restarts ---
+  - alias: "[LOG] Archive the Home Assistant log"
+    id: hive_log_archive
+    trigger:
+      - platform: homeassistant
+        event: start
+      - platform: homeassistant
+        event: shutdown
+    action:
+      - service: shell_command.archive_ha_log

@@ -1,0 +1,31 @@
+[Unit]
+Description=Hive heating Telegram bot (Home Assistant)
+Documentation=https://github.com/popek1990/hive-dynamic-boost-control-home-assistant
+After=network-online.target
+Wants=network-online.target
+# Never stop trying: a long outage must not leave the house unwatched.
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=hivebot
+Group=hivebot
+WorkingDirectory=/opt/hive-bot
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/python3 /opt/hive-bot/hive_bot.py
+Restart=always
+RestartSec=10
+
+# Hardening - the bot only needs to read its own directory and reach the network.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/hive-bot
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target
