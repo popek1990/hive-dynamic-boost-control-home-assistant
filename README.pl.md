@@ -5,7 +5,7 @@ Ten projekt sprawia, że Boost trwa tylko tyle, ile dom naprawdę potrzebuje, za
 wciśnięcie i przysyła wiadomość na Telegramie, gdy w domu jest za ciepło.**
 
 ![Licencja](https://img.shields.io/badge/license-MIT-blue.svg)
-![Home Assistant](https://img.shields.io/badge/Home%20Assistant-tested%20on%202026.9-41BDF5?logo=homeassistant&logoColor=white)
+![Home Assistant](https://img.shields.io/badge/Home%20Assistant-tested%20on%202026.10-41BDF5?logo=homeassistant&logoColor=white)
 ![Python](https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white)
 ![Zależności](https://img.shields.io/badge/dependencies-none-success)
 
@@ -124,6 +124,10 @@ Automatyzacja to jedyna część, która cokolwiek zmienia. Bot wyłącznie czyt
 
 ## Szybki start
 
+Potrzebujesz Home Assistanta **2026.10.3 lub nowszego** ze skonfigurowaną integracją Hive.
+Starsze wersje nie potrafią się już zalogować do Hive — szczegóły w
+[częstych pytaniach](#częste-pytania).
+
 ### Wariant A — tylko automatyzacja Boosta (około 5 minut)
 
 1. Dodaj komendę logowania do `configuration.yaml`
@@ -224,6 +228,15 @@ częściej, niż trzeba, albo w którym chcesz wiedzieć, co ogrzewanie faktyczn
 **Czy zadziała z termostatem innym niż Hive?** Bot tak — wystarczy wskazać własne encje przez
 `BOT_ENTITY_*`. Automatyzacja woła `hive.boost_heating_off`, więc dla innej marki trzeba
 podmienić to jedno wywołanie.
+
+**Wszystkie encje Hive są `unavailable`, a bot pisze, że czujnik nie podaje danych — dlaczego?**
+W październiku 2026 Hive zmienił swoją stronę logowania i integracja Hive w Home Assistancie
+2026.10.2 i starszym nie umie jej już odczytać. Integracja zatrzymuje się w stanie
+`setup_error`, a w logu jest `Failed to get login info: Expecting value: line 1 column 20
+(char 19)`. Restart Home Assistanta ani przeładowanie integracji nie pomaga; pomaga
+aktualizacja do **2026.10.3 lub nowszej** (zawiera `pyhive-integration` 1.0.10). Termostat
+w tym czasie działa sam na ostatnich ustawieniach, ale Home Assistant nie może nim sterować
+ani go logować.
 
 **Ile to oszczędza gazu?** Nie wiadomo i ten projekt nie będzie udawał, że wie. Bez odczytu
 licznika gazu każda liczba byłaby wymyślona. Uczciwe stwierdzenie jest takie: Boost przestaje

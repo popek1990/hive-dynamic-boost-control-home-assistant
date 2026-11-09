@@ -35,7 +35,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from messages import Locale, known_languages, make_locale
 
-VERSION = "2.0.1"
+VERSION = "2.0.2"
 DIRECTORY = Path(__file__).resolve().parent
 ENV_FILE = DIRECTORY / ".env"
 STATE_FILE = DIRECTORY / "state.json"

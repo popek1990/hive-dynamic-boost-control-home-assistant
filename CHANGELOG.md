@@ -3,6 +3,20 @@
 All notable changes to this project are documented here.
 This project follows [Semantic Versioning](https://semver.org/).
 
+## [2.0.2] - 2026-11-09
+
+### Documentation
+- Home Assistant **2026.10.3 or newer** is now a stated requirement. In October 2026 Hive changed
+  its sign-in page and the Hive integration in 2026.10.2 and older can no longer parse it: the
+  integration stops in `setup_error` with `Failed to get login info: Expecting value: line 1
+  column 20 (char 19)`, and every Hive entity goes `unavailable`. A restart does not fix it; the
+  update does (`pyhive-integration` 1.0.10). The FAQ in both READMEs explains the symptom and
+  the fix.
+- "Tested on" badge raised to Home Assistant 2026.10 — the package, the automation and the bot
+  run on 2026.10.4.
+
+No code changes apart from the version string.
+
 ## [2.0.1] - 2026-09-19
 
 ### Fixed
@@ -70,6 +84,7 @@ This project follows [Semantic Versioning](https://semver.org/).
 Initial public version: the dynamic Boost automation (`automations.yaml`) and a README.
 Tagged on 2026-09-18 as a rollback point before the 2.0.0 work started.
 
+[2.0.2]: https://github.com/popek1990/hive-dynamic-boost-control-home-assistant/releases/tag/v2.0.2
 [2.0.1]: https://github.com/popek1990/hive-dynamic-boost-control-home-assistant/releases/tag/v2.0.1
 [2.0.0]: https://github.com/popek1990/hive-dynamic-boost-control-home-assistant/releases/tag/v2.0.0
 [1.0.0]: https://github.com/popek1990/hive-dynamic-boost-control-home-assistant/releases/tag/v1.0.0

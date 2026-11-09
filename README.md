@@ -5,7 +5,7 @@ This makes Boost last only as long as the house actually needs, logs every press
 sends you a Telegram message when the house is too warm.**
 
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
-![Home Assistant](https://img.shields.io/badge/Home%20Assistant-tested%20on%202026.9-41BDF5?logo=homeassistant&logoColor=white)
+![Home Assistant](https://img.shields.io/badge/Home%20Assistant-tested%20on%202026.10-41BDF5?logo=homeassistant&logoColor=white)
 ![Python](https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white)
 ![Dependencies](https://img.shields.io/badge/dependencies-none-success)
 ![Tests](https://img.shields.io/badge/tests-82%20passing-success)
@@ -140,6 +140,9 @@ flowchart LR
 The automation is the only part that changes anything. The bot only reads.
 
 ## Quick start
+
+You need Home Assistant **2026.10.3 or newer** with the Hive integration set up. Older releases
+can no longer log in to Hive — see the [FAQ](#faq).
 
 ### Option A — just the Boost automation (about 5 minutes)
 
@@ -277,6 +280,14 @@ at runtime.
 
 **Does it survive a reboot?** Yes: `systemctl enable` plus `Restart=always`, and the bot keeps
 its state (bound chat, threshold, alert counters, Telegram offset) in `state.json`.
+
+**Every Hive entity went `unavailable` and the bot says the sensor reports no data — why?**
+In October 2026 Hive changed its sign-in page, and the Hive integration in Home Assistant
+2026.10.2 and older can no longer read it. The integration stops in `setup_error`, and the log
+shows `Failed to get login info: Expecting value: line 1 column 20 (char 19)`. Restarting Home
+Assistant or reloading the integration does not help; updating to **2026.10.3 or newer** does
+(it ships `pyhive-integration` 1.0.10). The thermostat keeps running on its last settings in the
+meantime, but nothing in Home Assistant can control or log it.
 
 **How much gas does it save?** Unknown, and this project will not pretend otherwise. Saving
 depends on your house, your boiler and how often Boost was being abused. Without a gas meter
