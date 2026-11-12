@@ -38,14 +38,17 @@ class TestTranslations(unittest.TestCase):
 
     def test_every_message_formats_in_every_language(self):
         # Placeholders must exist in all languages; a stray {name} would raise.
-        arguments = dict(threshold="23", temperature="22.6", target="21.0", day="Monday 19.09",
+        arguments = dict(percent="50", known="2 h 00 min", span="4 h 00 min", ranges="08.10",
+                         gap="2 min", note="", hours=3, first="22.0", last="23.0",
+                         heating="10 min", water="1 h 00 min", coverage="", threshold="23", temperature="22.6", target="21.0", day="Monday 19.09",
                          days=7, duration="10 min", periods="2 periods", start="08:00",
                          end="08:10", date="19.09", count=3, label="Heating", at="",
                          schedule="04:30-23:00", state="on", action="heating", mode="schedule",
                          time="08:00", age="5 min", error="boom", version="2.0", seconds=60,
                          since="08:00", uptime="1 h 00 min", hysteresis="0.3", when="none",
                          port=8099, language="en", low=5, high=35, min="21.0", max="23.0",
-                         min_time="04:00", max_time="15:00", avg="22.10")
+                         min_time="04:00", max_time="15:00", avg="22.10",
+                         entity="sensor.ha_heartbeat", every=5, range="22.10 13:17 – 24.10 13:10")
         for language in msg.MESSAGES:
             locale = msg.make_locale(language, "Europe/London")
             for key in msg.MESSAGES[language]:
@@ -76,6 +79,13 @@ class TestFormatting(unittest.TestCase):
         self.assertEqual(self.en.duration(0), "0 min")
         self.assertEqual(self.en.duration(59.6), "1 h 00 min")
         self.assertEqual(self.en.duration(95), "1 h 35 min")
+
+    def test_percent_never_rounds_to_a_misleading_value(self):
+        locale = msg.make_locale("en", "Europe/London")
+        self.assertEqual(locale.percent(859.5223190333334, 859.5223190333336), "100")
+        self.assertEqual(locale.percent(239.0, 240.0), "99")
+        self.assertEqual(locale.percent(0.5, 240.0), "<1")
+        self.assertEqual(locale.percent(0.0, 240.0), "0")
 
     def test_plural_forms(self):
         self.assertEqual(self.en.count(1, "period"), "1 period")
@@ -228,16 +238,18 @@ class TestStateMigration(unittest.TestCase):
         self.assertNotIn("czat_id", self.path.read_text(encoding="utf-8"))
 
 
-class TestOnPeriods(unittest.TestCase):
-    """Hive drops to 'unavailable' for a few minutes; that must not be counted as heating."""
+class TestTimeline(unittest.TestCase):
+    """Hive drops to 'unavailable' for a few minutes; that must not be counted as on or off."""
 
     def setUp(self):
         self.since = datetime(2026, 9, 19, 8, 0, tzinfo=LONDON)
         self.until = datetime(2026, 9, 19, 12, 0, tzinfo=LONDON)
 
-    def minutes(self, entries, stitch=0.0):
-        return bot.total_minutes(
-            bot.on_periods(entries, self.since, self.until, LONDON, stitch))
+    def segments(self, entries, value=bot.on_off_value, gaps=()):
+        return bot.timeline(entries, self.since, self.until, value, gaps)
+
+    def minutes(self, entries):
+        return bot.on_minutes(self.segments(entries))
 
     def test_simple_on_off(self):
         self.assertEqual(self.minutes([entry(8, 0, "on"), entry(8, 10, "off")]), 10)
@@ -245,38 +257,65 @@ class TestOnPeriods(unittest.TestCase):
     def test_unavailable_closes_the_period(self):
         entries = [entry(8, 0, "on"), entry(8, 10, "unavailable"), entry(8, 20, "off")]
         self.assertEqual(self.minutes(entries), 10, "the outage must not count as heating")
+        self.assertEqual(bot.known_minutes(self.segments(entries)), 230)
 
     def test_trailing_unavailable_does_not_run_to_the_end_of_the_window(self):
         entries = [entry(8, 0, "on"), entry(8, 10, "unavailable")]
         self.assertEqual(self.minutes(entries), 10, "data ending in an outage must not count 240")
+        self.assertEqual(bot.known_minutes(self.segments(entries)), 10)
 
-    def test_short_blip_is_stitched_when_configured(self):
+    def test_short_blip_is_joined_for_display_but_not_counted(self):
         entries = [entry(8, 0, "on"), entry(8, 10, "unavailable"), entry(8, 12, "on"),
                    entry(8, 30, "off")]
-        self.assertEqual(self.minutes(entries, stitch=5.0), 30)
-        self.assertEqual(self.minutes(entries, stitch=0.0), 28)
+        segments = self.segments(entries)
+        runs = bot.on_runs(segments, stitch_gap_min=5.0)
+        self.assertEqual(len(runs), 1)
+        self.assertEqual(runs[0].minutes, 28, "two minutes without data are not heating")
+        self.assertEqual(runs[0].unknown_min, 2)
+        self.assertEqual(bot.on_minutes(segments), 28)
+        self.assertEqual(len(bot.on_runs(segments, stitch_gap_min=0.0)), 2)
 
-    def test_long_gap_is_not_stitched(self):
+    def test_long_gap_is_not_joined(self):
         entries = [entry(8, 0, "on"), entry(8, 10, "unavailable"), entry(9, 0, "on"),
                    entry(9, 10, "off")]
-        self.assertEqual(self.minutes(entries, stitch=5.0), 20)
+        runs = bot.on_runs(self.segments(entries), stitch_gap_min=5.0)
+        self.assertEqual([run.minutes for run in runs], [10, 10])
+        self.assertTrue(runs[0].open_end and runs[1].open_start)
 
     def test_still_on_now_runs_to_the_end_of_the_window(self):
-        self.assertEqual(self.minutes([entry(11, 0, "on")]), 60)
+        entries = [entry(8, 0, "off"), entry(11, 0, "on")]
+        self.assertEqual(self.minutes(entries), 60)
 
     def test_repeated_state_does_not_split_the_period(self):
         entries = [entry(8, 0, "on"), entry(8, 5, "on"), entry(8, 20, "off")]
+        self.assertEqual(len(bot.on_runs(self.segments(entries))), 1)
         self.assertEqual(self.minutes(entries), 20)
 
     def test_entries_before_the_window_are_clipped(self):
         entries = [entry(20, 0, "on", day=18), entry(8, 30, "off")]
         self.assertEqual(self.minutes(entries), 30)
+        self.assertTrue(bot.is_complete(self.segments(entries)))
 
-    def test_no_entries_means_nothing(self):
-        self.assertEqual(self.minutes([]), 0)
+    def test_no_entries_means_unknown_not_off(self):
+        segments = self.segments([])
+        self.assertEqual(bot.on_minutes(segments), 0)
+        self.assertEqual(bot.known_minutes(segments), 0)
+        self.assertFalse(bot.is_complete(segments))
 
-    def test_only_unavailable_means_nothing(self):
-        self.assertEqual(self.minutes([entry(8, 0, "unavailable")]), 0)
+    def test_only_unavailable_means_unknown(self):
+        segments = self.segments([entry(8, 0, "unavailable")])
+        self.assertEqual(bot.known_minutes(segments), 0)
+
+    def test_history_starting_late_leaves_the_start_unknown(self):
+        segments = self.segments([entry(10, 0, "off")])
+        self.assertEqual(bot.known_minutes(segments), 120)
+        self.assertEqual(bot.span_minutes(segments), 240)
+
+    def test_segments_cover_the_window_exactly(self):
+        segments = self.segments([entry(8, 0, "on"), entry(9, 0, "unknown"), entry(10, 0, "off")])
+        self.assertEqual(bot.span_minutes(segments), 240)
+        self.assertEqual(segments[0][0], self.since.astimezone(bot.UTC))
+        self.assertEqual(segments[-1][1], self.until.astimezone(bot.UTC))
 
 
 class TestHistoryValues(unittest.TestCase):
@@ -284,27 +323,34 @@ class TestHistoryValues(unittest.TestCase):
         self.since = datetime(2026, 9, 19, 0, 0, tzinfo=LONDON)
         self.until = datetime(2026, 9, 19, 12, 0, tzinfo=LONDON)
 
-    def test_value_at_takes_the_last_reading_before_the_moment(self):
-        entries = [entry(6, 0, "21.5"), entry(9, 0, "22.6"), entry(11, 0, "23.1")]
-        moment = datetime(2026, 9, 19, 10, 0, tzinfo=LONDON)
-        self.assertEqual(bot.value_at(entries, moment, LONDON), 22.6)
+    def numbers(self, entries):
+        return bot.timeline(entries, self.since, self.until, bot.number_value)
 
-    def test_value_at_ignores_non_numeric_states(self):
-        entries = [entry(6, 0, "21.5"), entry(7, 0, "unavailable")]
-        moment = datetime(2026, 9, 19, 8, 0, tzinfo=LONDON)
-        self.assertEqual(bot.value_at(entries, moment, LONDON), 21.5)
+    def test_value_at_takes_the_reading_in_force(self):
+        segments = self.numbers([entry(0, 0, "21.5"), entry(9, 0, "22.6"), entry(11, 0, "23.1")])
+        self.assertEqual(bot.value_at(segments, datetime(2026, 9, 19, 10, 0, tzinfo=LONDON)), 22.6)
+
+    def test_value_at_does_not_carry_a_reading_through_unavailable(self):
+        segments = self.numbers([entry(0, 0, "21.5"), entry(7, 0, "unavailable")])
+        self.assertIsNone(bot.value_at(segments, datetime(2026, 9, 19, 8, 0, tzinfo=LONDON)))
 
     def test_temperature_stats(self):
-        entries = [entry(0, 0, "21.0"), entry(6, 0, "23.0"), entry(9, 0, "22.0")]
-        stats = bot.temperature_stats(entries, self.since, self.until, LONDON)
+        segments = self.numbers([entry(0, 0, "21.0"), entry(6, 0, "23.0"), entry(9, 0, "22.0")])
+        stats = bot.temperature_stats(segments)
         self.assertEqual(stats["min"], 21.0)
         self.assertEqual(stats["max"], 23.0)
-        self.assertEqual(stats["now"], 22.0)
+        self.assertEqual((stats["first"], stats["last"]), (21.0, 22.0))
         # 6 h at 21, 3 h at 23, 3 h at 22 -> (126 + 69 + 66) / 12
         self.assertAlmostEqual(stats["average"], 21.75, places=2)
 
+    def test_temperature_stats_skip_unknown_time(self):
+        segments = self.numbers([entry(0, 0, "21.0"), entry(6, 0, "unavailable"),
+                                 entry(9, 0, "24.0")])
+        # 6 h at 21 and 3 h at 24; the 3 h without data weigh nothing.
+        self.assertAlmostEqual(bot.temperature_stats(segments)["average"], 22.0, places=2)
+
     def test_temperature_stats_without_data(self):
-        self.assertEqual(bot.temperature_stats([], self.since, self.until, LONDON), {})
+        self.assertEqual(bot.temperature_stats(self.numbers([])), {})
 
 
 class TestDayBounds(unittest.TestCase):
@@ -341,7 +387,7 @@ class TestDayBounds(unittest.TestCase):
         after = datetime(2026, 3, 29, 2, 30, tzinfo=LONDON)
         self.assertEqual((after - before).total_seconds() / 60, 120, "naive subtraction")
         self.assertEqual(bot.elapsed_minutes(before, after), 60, "real elapsed time")
-        self.assertEqual(bot.total_minutes([(before, after)]), 60)
+        self.assertEqual(bot.span_minutes([(before, after, "on")]), 60)
 
     def test_today_is_never_projected_into_the_future(self):
         stub = self._bot_stub()

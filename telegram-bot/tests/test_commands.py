@@ -32,14 +32,29 @@ def row(hour, minute, state, day=19):
     return {"state": state, "last_changed": stamp(hour, minute, day)}
 
 
+def climate_row(hour, minute, action, day=19, state="heat", changed=None):
+    """A full climate row: hvac_action is an attribute, so last_updated is its stamp."""
+    return {"state": state, "last_changed": changed or stamp(0, 0, day),
+            "last_updated": stamp(hour, minute, day),
+            "attributes": {"hvac_action": action, "current_temperature": 21.0,
+                           "temperature": 21.0}}
+
+
+def midnight_rows(instance, **values):
+    """The rows Home Assistant puts first: the state in force at local midnight."""
+    return {instance.entity[name]: [row(0, 0, value)] for name, value in values.items()}
+
+
 class FakeHA:
     """Stands in for the Home Assistant REST client."""
 
-    def __init__(self, states=None, history=None, error=None):
+    def __init__(self, states=None, history=None, error=None, logbook=None, logbook_error=None):
         self.values = states or {}
         self.series = history or {}
         self.error = error
         self.history_calls = []
+        self.entries = logbook or []
+        self.logbook_error = logbook_error
 
     def _raise_if_needed(self):
         if self.error:
@@ -59,10 +74,16 @@ class FakeHA:
     def states(self, entities):
         return {entity: self.state(entity) for entity in entities}
 
-    def history(self, entities, since, until):
+    def history(self, entities, since, until, attributes=False):
         self._raise_if_needed()
-        self.history_calls.append((list(entities), since, until))
+        self.history_calls.append((list(entities), since, until, attributes))
         return {entity: list(self.series.get(entity, [])) for entity in entities}
+
+    def logbook(self, since, until):
+        self._raise_if_needed()
+        if self.logbook_error:
+            raise bot.HAError(self.logbook_error)
+        return list(self.entries)
 
 
 class FakeTelegram:
@@ -116,7 +137,6 @@ def entities(instance, **overrides):
         names["mode"]: "schedule",
         names["climate"]: {"state": "heat", "last_changed": stamp(17, 55),
                            "attributes": {"hvac_action": "idle"}},
-        names["heating_state"]: "off",
         names["boost_heating"]: "off",
         names["boost_water"]: "on",
         names["water_heater"]: "on",
@@ -145,16 +165,16 @@ class TestCommands(unittest.TestCase):
         message = instance.tg.last
         self.assertIn("22.6 °C", message)
         self.assertIn("Thermostat target: 21.0 °C", message)
-        self.assertIn("not heating", message)
-        self.assertIn("Hive action: idle", message)
-        self.assertIn("Hot water: on", message)
+        self.assertIn("Heating: Hive is not calling for heat (hvac_action: idle)", message)
+        self.assertIn("Hot water: control on", message)
+        self.assertNotIn("Radiators", message, "the bot does not measure radiators")
 
     def test_temperature_uses_the_polish_decimal_comma(self):
         instance = make_bot("pl")
         instance.ha = FakeHA(states=entities(instance))
         instance.cmd_temperature()
         self.assertIn("22,6 °C", instance.tg.last)
-        self.assertIn("Ciepła woda: włączona", instance.tg.last)
+        self.assertIn("Ciepła woda (CWU): sterowanie włączone", instance.tg.last)
 
     def test_temperature_without_a_reading_says_no_data(self):
         instance = make_bot("en")
@@ -165,38 +185,42 @@ class TestCommands(unittest.TestCase):
 
     def test_heating_today_lists_the_periods(self):
         instance = make_bot("en")
-        heating = instance.entity["heating_state"]
-        instance.ha = FakeHA(states=entities(instance),
-                             history={heating: [row(8, 0, "on"), row(8, 25, "off"),
-                                                row(14, 0, "on"), row(14, 10, "off")]})
+        climate = instance.entity["climate"]
+        instance.ha = FakeHA(states=entities(instance), history={climate: [
+            climate_row(0, 0, "idle"), climate_row(8, 0, "heating"), climate_row(8, 25, "idle"),
+            climate_row(14, 0, "heating"), climate_row(14, 10, "idle")]})
         instance.cmd_heating()
         message = instance.tg.last
-        self.assertIn("35 min", message)
-        self.assertIn("2 periods", message)
+        self.assertIn("Call for heat: 35 min in 2 periods", message)
         self.assertIn("08:00 – 08:25", message)
+        self.assertNotIn("Data for", message, "complete data needs no coverage warning")
+        self.assertIn("not boiler firing time", message)
+        self.assertTrue(instance.ha.history_calls[0][3], "climate history must carry attributes")
 
     def test_heating_today_with_nothing_shows_the_last_run(self):
         instance = make_bot("en")
-        heating = instance.entity["heating_state"]
-        instance.ha = FakeHA(states=entities(instance),
-                             history={heating: [row(11, 0, "on", day=17),
-                                                row(11, 20, "off", day=17)]})
+        climate = instance.entity["climate"]
+        instance.ha = FakeHA(states=entities(instance), history={climate: [
+            climate_row(0, 0, "idle", day=17),
+            climate_row(11, 0, "heating", day=17), climate_row(11, 20, "idle", day=17)]})
         instance.cmd_heating()
-        self.assertIn("0 min", instance.tg.last)
-        self.assertIn("17.09", instance.tg.last)
+        self.assertIn("Call for heat: 0 min", instance.tg.last)
+        self.assertIn("Last call for heat: 17.09 11:00 – 11:20 (20 min)", instance.tg.last)
 
     def test_heating_range_shows_one_line_per_day(self):
         instance = make_bot("en")
-        heating = instance.entity["heating_state"]
-        instance.ha = FakeHA(states=entities(instance),
-                             history={heating: [row(9, 0, "on", day=17), row(9, 30, "off", day=17),
-                                                row(9, 0, "on"), row(9, 15, "off")]})
+        climate = instance.entity["climate"]
+        instance.ha = FakeHA(states=entities(instance), history={climate: [
+            climate_row(0, 0, "idle", day=17),
+            climate_row(9, 0, "heating", day=17), climate_row(9, 30, "idle", day=17),
+            climate_row(9, 0, "heating"), climate_row(9, 15, "idle")]})
         instance.cmd_heating("3")
         message = instance.tg.last
         self.assertIn("last 3 days", message)
         self.assertIn("17.09: 30 min", message)
+        self.assertIn("18.09: 0 min", message)
         self.assertIn("19.09: 15 min", message)
-        self.assertIn("45 min", message)
+        self.assertIn("Total: 45 min", message)
 
     def test_heating_range_is_capped(self):
         instance = make_bot("en")
@@ -207,9 +231,11 @@ class TestCommands(unittest.TestCase):
     def test_boosts_today_with_the_temperature_at_the_time(self):
         instance = make_bot("en")
         instance.ha = FakeHA(states=entities(instance), history={
-            instance.entity["boost_heating"]: [row(11, 25, "on"), row(11, 28, "off")],
-            instance.entity["boost_water"]: [row(11, 25, "on"), row(11, 39, "off")],
-            instance.entity["temperature"]: [row(11, 0, "22.6")],
+            instance.entity["boost_heating"]: [row(0, 0, "off"), row(11, 25, "on"),
+                                               row(11, 28, "off")],
+            instance.entity["boost_water"]: [row(0, 0, "off"), row(11, 25, "on"),
+                                             row(11, 39, "off")],
+            instance.entity["temperature"]: [row(0, 0, "22.4"), row(11, 0, "22.6")],
         })
         instance.cmd_boosts()
         message = instance.tg.last
@@ -230,20 +256,31 @@ class TestCommands(unittest.TestCase):
 
     def test_boosts_without_any(self):
         instance = make_bot("pl")
-        instance.ha = FakeHA(states=entities(instance))
+        instance.ha = FakeHA(states=entities(instance), history=midnight_rows(
+            instance, boost_heating="off", boost_water="off", temperature="22.0"))
         instance.cmd_boosts()
         self.assertIn("Ogrzewanie: brak", instance.tg.last)
         self.assertIn("Ciepła woda: brak", instance.tg.last)
+
+    def test_boosts_without_history_say_no_data_not_none(self):
+        instance = make_bot("en")
+        instance.ha = FakeHA(states=entities(instance))
+        instance.cmd_boosts()
+        self.assertIn("Heating: no data", instance.tg.last)
+        self.assertNotIn("Heating: none", instance.tg.last)
 
     def test_water_shows_windows_and_optional_schedule(self):
         instance = make_bot("en", hw_schedule_text="04:30-23:00, Sundays also 02:00-04:00")
         water = instance.entity["water_heater"]
         instance.ha = FakeHA(states=entities(instance),
-                             history={water: [row(4, 30, "on"), row(17, 0, "off")]})
+                             history={water: [row(0, 0, "off"), row(4, 30, "on"),
+                                              row(17, 0, "off")]})
         instance.cmd_water()
         message = instance.tg.last
+        self.assertIn("Control on for: 12 h 30 min", message)
         self.assertIn("04:30 – 17:00", message)
         self.assertIn("Sundays also", message)
+        self.assertIn("not continuous boiler firing", message)
 
     def test_water_without_a_schedule_text_stays_quiet_about_it(self):
         instance = make_bot("en")
@@ -255,17 +292,22 @@ class TestCommands(unittest.TestCase):
         instance = make_bot("en")
         instance.ha = FakeHA(states=entities(instance), history={
             instance.entity["temperature"]: [row(0, 0, "21.0"), row(12, 0, "23.0")],
-            instance.entity["heating_state"]: [row(8, 0, "on"), row(8, 20, "off")],
-            instance.entity["boost_heating"]: [row(11, 0, "on"), row(11, 3, "off")],
-            instance.entity["boost_water"]: [],
-            instance.entity["water_heater"]: [row(4, 30, "on")],
+            instance.entity["climate"]: [climate_row(0, 0, "idle"), climate_row(8, 0, "heating"),
+                                         climate_row(8, 20, "idle")],
+            instance.entity["boost_heating"]: [row(0, 0, "off"), row(11, 0, "on"),
+                                               row(11, 3, "off")],
+            instance.entity["boost_water"]: [row(0, 0, "off")],
+            instance.entity["water_heater"]: [row(0, 0, "off"), row(4, 30, "on")],
         })
         instance.cmd_today()
         message = instance.tg.last
         self.assertIn("min 21.0 °C", message)
         self.assertIn("max 23.0 °C", message)
         self.assertIn("Heating Boosts: 1", message)
-        self.assertIn("Radiators: 20 min", message)
+        self.assertIn("Hot water Boosts: 0", message)
+        self.assertIn("Heating, call for heat: 20 min in 1 period", message)
+        self.assertIn("Hot water, control on: 13 h 30 min", message)
+        self.assertNotIn("data for", message)
 
     def test_status_when_home_assistant_answers(self):
         instance = make_bot("en")
@@ -418,20 +460,52 @@ class TestAlerts(unittest.TestCase):
         self.instance.check_temperature()
         self.assertIn("threshold exceeded", self.instance.tg.last)
 
-    def test_the_valve_hint_only_when_water_heats_and_radiators_do_not(self):
+    def test_no_valve_diagnosis_when_heating_is_idle_and_water_is_on(self):
+        # The old alert called this "a leaking valve". One reading plus the hot-water state
+        # cannot diagnose that, so the alert gives facts only.
         names = self.instance.entity
-        self.instance.ha.values[names["heating_state"]] = "off"
         self.instance.ha.values[names["water_heater"]] = "on"
         self.set_temperature(23.4)
         self.instance.check_temperature()
-        self.assertIn("leaking valve", self.instance.tg.last)
+        message = self.instance.tg.last
+        self.assertIn("threshold exceeded", message)
+        self.assertIn("Hive is not calling for heat", message)
+        for word in ("valve", "leak", "radiators are"):
+            self.assertNotIn(word, message.lower())
+        self.assertIn("not a diagnosis", message)
 
-    def test_no_valve_hint_while_the_radiators_run(self):
+    def test_no_valve_diagnosis_in_any_state_or_language(self):
+        for language in msg.known_languages():
+            for action, climate_state, water in (("heating", "heat", "on"), ("idle", "heat", "on"),
+                                                 (None, "unavailable", "on"),
+                                                 ("idle", "heat", "unknown")):
+                instance = make_bot(language)
+                instance.ha = FakeHA(states=entities(
+                    instance, water_heater=water,
+                    climate={"state": climate_state, "last_changed": stamp(17, 0),
+                             "attributes": {"hvac_action": action} if action else {}}))
+                instance.ha.values[instance.entity["temperature"]] = {
+                    "state": "23.4", "last_changed": stamp(17, 59), "attributes": {}}
+                instance.check_temperature()
+                text = instance.tg.last.lower()
+                for word in ("valve", "leak", "zawór", "zaworu", "przeciek"):
+                    self.assertNotIn(word, text, f"{language} {action} {water}")
+
+    def test_alert_shows_the_last_hours_with_coverage(self):
         names = self.instance.entity
-        self.instance.ha.values[names["heating_state"]] = "on"
+        self.instance.ha.series = {
+            names["temperature"]: [row(15, 0, "22.5"), row(17, 30, "23.4")],
+            names["climate"]: [climate_row(15, 0, "idle"), climate_row(16, 0, "heating"),
+                               climate_row(16, 30, "idle")],
+            names["water_heater"]: [row(15, 0, "on"), row(16, 0, "unavailable"),
+                                    row(17, 0, "on")],
+        }
         self.set_temperature(23.4)
         self.instance.check_temperature()
-        self.assertNotIn("leaking valve", self.instance.tg.last)
+        message = self.instance.tg.last
+        self.assertIn("Last 3 h: 22.5 → 23.4 °C", message)
+        self.assertIn("call for heat 30 min", message)
+        self.assertIn("hot water control on 2 h 00 min (data for 66% of the time)", message)
 
     def test_home_assistant_down_then_restored(self):
         instance = make_bot("en", ha_down_min=10)
@@ -468,7 +542,7 @@ class TestAlerts(unittest.TestCase):
         frozen.ha = FakeHA(states=entities(frozen))
         self._freeze_reading(frozen, 600)
         frozen.check_temperature()
-        self.assertIn("has not moved", frozen.tg.last)
+        self.assertIn("has not changed", frozen.tg.last)
         self.assertIn("22.6 °C", frozen.tg.last, "say what it is stuck at")
 
         gone = make_bot("en")
@@ -485,14 +559,14 @@ class TestAlerts(unittest.TestCase):
             "last_changed": (instance.clock - timedelta(minutes=90)).isoformat(),
             "attributes": {}}
         instance.check_temperature()
-        self.assertIn("has not moved", instance.tg.last)
+        self.assertIn("has not changed", instance.tg.last)
         count = len(instance.tg.sent)
         instance.check_temperature()
         self.assertEqual(len(instance.tg.sent), count, "do not repeat the same warning")
         instance.ha.values[names["temperature"]] = {
             "state": "22.4", "last_changed": instance.clock.isoformat(), "attributes": {}}
         instance.check_temperature()
-        self.assertIn("refreshing again", instance.tg.last)
+        self.assertIn("back to normal", instance.tg.last)
 
     def test_an_unavailable_sensor_is_reported(self):
         instance = make_bot("en")
@@ -520,7 +594,8 @@ class TestBothLanguages(unittest.TestCase):
                             "/status", "/threshold", "/mute", "/unmute"):
                 instance = make_bot(language)
                 instance.ha = FakeHA(states=entities(instance), history={
-                    instance.entity["heating_state"]: [row(8, 0, "on"), row(8, 20, "off")],
+                    instance.entity["climate"]: [climate_row(8, 0, "heating"),
+                                                 climate_row(8, 20, "idle")],
                     instance.entity["temperature"]: [row(8, 0, "22.6")],
                 })
                 instance.handle_command(OWNER, command)

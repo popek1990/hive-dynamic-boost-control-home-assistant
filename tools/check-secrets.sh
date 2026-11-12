@@ -72,6 +72,7 @@ BLOCKING=(
   "private ip address|(^|[^0-9.])(10\.[0-9]{1,3}|192\.168\.[0-9]{1,3}|172\.(1[6-9]|2[0-9]|3[01])\.[0-9]{1,3})\.[0-9]{1,3}"
   "remote home assistant hostname|[a-z0-9-]+\.(ui\.nabu\.casa|nabu\.casa|duckdns\.org|ddns\.net)"
   "home assistant user id|(^|[^0-9a-f])[0-9a-f]{32}([^0-9a-f]|$)"
+  "uuid (e.g. a dead-man's-switch ping url)|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
   "coordinates|(^|[^0-9])-?[0-9]{1,2}\.[0-9]{3,}[[:space:]]*,[[:space:]]*-?[0-9]{1,3}\.[0-9]{3,}"
   "coordinates with a decimal comma|[0-9]{1,2},[0-9]+[[:space:]]*[/,][[:space:]]*(−|–|-)?[0-9]{1,2},[0-9]+"
 )

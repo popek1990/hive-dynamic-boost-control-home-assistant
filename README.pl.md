@@ -5,7 +5,7 @@ Ten projekt sprawia, że Boost trwa tylko tyle, ile dom naprawdę potrzebuje, za
 wciśnięcie i przysyła wiadomość na Telegramie, gdy w domu jest za ciepło.**
 
 ![Licencja](https://img.shields.io/badge/license-MIT-blue.svg)
-![Home Assistant](https://img.shields.io/badge/Home%20Assistant-tested%20on%202026.10-41BDF5?logo=homeassistant&logoColor=white)
+![Home Assistant](https://img.shields.io/badge/Home%20Assistant-tested%20on%202026.10%20and%202026.11-41BDF5?logo=homeassistant&logoColor=white)
 ![Python](https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white)
 ![Zależności](https://img.shields.io/badge/dependencies-none-success)
 
@@ -53,6 +53,12 @@ minutę), komendy z liczbami, które naprawdę są potrzebne, health check infor
 Assistant albo chmura Hive przestaje odpowiadać, i usługa systemd, żeby bot wracał po
 restarcie. Tylko biblioteka standardowa: bez `pip`, bez virtualenva, bez kontenera.
 
+**Strażnicy na każdej warstwie** — Home Assistant nie odpowiada; Home Assistant odpowiada, ale
+stoi (czujnik pulsu przestaje się zmieniać); historia przestaje się zapisywać; padł sam bot;
+a przez opcjonalny zewnętrzny „dead-man's switch” także wyłączenie całego serwera. U autora
+cały serwer był wyłączony przez dwie doby i nikt nie dostał powiadomienia; teraz zewnętrzny serwis
+powiadomiłby po wybranym czasie, a bot po powrocie sam zgłasza przerwę.
+
 Progi ostrzeżeń są zmierzone, nie wymyślone: Hive przysyła wartość tylko wtedy, gdy się zmieni,
 więc spokojny dom wygląda identycznie jak milczący czujnik. Dlatego ostrzeżenie „odczyt nie
 drgnął" czeka domyślnie 8 godzin — na 30 dniach prawdziwych danych próg 45 minut odezwałby się
@@ -70,18 +76,31 @@ Prawdziwe wiadomości bota, na wymyślonych liczbach:
 🌡 Teraz w domu
 Temperatura: 23,2 °C   (próg alertu 23,0 °C)
 Cel termostatu: 21,0 °C
-Grzejniki: GRZEJĄ (akcja Hive: heating)
+Ogrzewanie (CO): Hive żąda ciepła
 Tryb ogrzewania: harmonogram
-Ciepła woda: włączona
-Odczyt z: 18:26 (4 min temu)
+Ciepła woda (CWU): sterowanie włączone
+Ostatnia zmiana odczytu: 18:26 (4 min temu)
 ```
 
 ```text
-🔥 Ogrzewanie — dziś (środa 14.01)
+🔥 Ogrzewanie (CO) — dziś (środa 14.01)
 
-Razem: 1 h 25 min w 2 okresach
+Żądanie ciepła: 1 h 25 min w 2 okresach
   • 06:30 – 07:12  (42 min)
   • 17:05 – 17:48  (43 min)
+
+ℹ️ Liczone z żądania ciepła Hive (climate hvac_action). To sygnał sterowania: nie czas palenia kotła, zużycie gazu ani temperatura grzejników.
+```
+
+Gdy części dnia brakuje danych, bot to mówi, zamiast podawać zero:
+
+```text
+🔥 Ogrzewanie (CO) — dziś (środa 14.01)
+
+Żądanie ciepła: 42 min w 1 okresie
+  • 06:30 – 07:12  (42 min)
+⚠️ Dane za 9 h 10 min z 18 h 30 min (49%). Suma obejmuje tylko znany czas.
+Home Assistant nie działał: 14.01 07:20–16:40. Starych wartości z tego czasu nie liczę.
 ```
 
 ```text
@@ -101,9 +120,10 @@ Alert, z kontekstem, który go czyni użytecznym:
 Dom: 23,4 °C   (próg 23,0 °C)
 Godzina: 18:30
 Cel termostatu: 21,0 °C
-Grzejniki: nie grzeją
-Ciepła woda: włączona
-ℹ️ Grzejniki nie są wołane, a dom się nagrzewa — to wygląda na przeciek zaworu.
+Ogrzewanie (CO): Hive nie żąda ciepła (hvac_action: idle)
+Ciepła woda (CWU): sterowanie włączone
+Ostatnie 3 h: 22,6 → 23,4 °C; żądanie ciepła CO 0 min; sterowanie CWU włączone 3 h 00 min.
+ℹ️ To zapisane fakty, nie diagnoza: wzrost temperatury może mieć wiele przyczyn.
 ```
 
 ## Jak to jest połączone
@@ -118,6 +138,8 @@ flowchart LR
     HA -->|"REST API, tylko odczyt"| Bot["hive_bot.py (systemd)"]
     Bot -->|alerty i odpowiedzi| Tg["Telegram"]
     Cron["watchdog w cronie"] -->|/health| Bot
+    HA -->|"puls co 5 min"| Bot
+    Bot -->|"ping, gdy wszystko OK"| Ext["zewnętrzny strażnik (opcjonalny)"]
 ```
 
 Automatyzacja to jedyna część, która cokolwiek zmienia. Bot wyłącznie czyta.
@@ -168,16 +190,20 @@ BOT_LANG=pl
 BOT_TZ=Europe/London
 ```
 
+Mocno zalecane: `BOT_PING_URL` — adres sprawdzenia w zewnętrznym serwisie typu „dead-man's
+switch” (np. [healthchecks.io](https://healthchecks.io)). Tylko coś poza domem może powiedzieć,
+że cały serwer jest wyłączony. Szczegóły: [telegram-bot/README.md#watchdogs](telegram-bot/README.md#watchdogs).
+
 ## Komendy bota
 
 | Komenda | Co odpowiada |
 |---|---|
-| `/temperatura` | temperatura teraz, cel termostatu, czy grzejniki grzeją, ciepła woda, wiek odczytu |
-| `/ogrzewanie` | ile dziś grzały grzejniki, okres po okresie (`/ogrzewanie 7` = tydzień) |
+| `/temperatura` | temperatura teraz, cel termostatu, czy Hive żąda ciepła (CO), sterowanie CWU, wiek odczytu |
+| `/ogrzewanie` | ile dziś Hive żądał ciepła, okres po okresie, z pokryciem danymi (`/ogrzewanie 7` = tydzień) |
 | `/boosty` | każdy Boost z godziną, długością i temperaturą, przy której się zaczął |
-| `/woda` | stan ciepłej wody, dzisiejsze okna, harmonogram słownie |
+| `/woda` | sterowanie ciepłą wodą (CWU), dzisiejsze okna, harmonogram słownie |
 | `/dzis` | jeden ekran: min/max/średnia, ogrzewanie, boosty, ciepła woda, alerty |
-| `/status` | health check bota, czas pracy, łączność z HA, wiek danych, próg, wyciszenie |
+| `/status` | health check bota, czas pracy, łączność z HA, wiek danych, puls HA, ping zewnętrzny, próg, wyciszenie |
 | `/prog 23` | pokaż lub zmień próg alertu |
 | `/cicho 120` | wycisz alerty na 120 minut (1–1440) |
 | `/glosno` | włącz alerty z powrotem |
@@ -195,7 +221,12 @@ niezależny od automatyzacji Boosta:
 - **cotygodniowy cykl antylegionella** (niedziela 02:00–04:00), niezależny od oszczędzania,
 - **uzgodnienie stanu po restarcie**, żeby restart w środku okna nie zostawił kotła w losowym stanie,
 - **loggery CSV**: temperatura co 15 minut, zdarzenia ciepłej wody, zmiany termostatu wraz z
-  użytkownikiem, który je zrobił,
+  użytkownikiem, który je zrobił. Każde przełączenie ciepłej wody zapisuje, czy Hive je
+  **potwierdził** (`confirmed`, `not_confirmed`, `hive_unavailable`), zamiast logować ON/OFF
+  w chwili wysłania polecenia — tak powstało ponad dwa tygodnie wpisów, które nigdy nie dotarły
+  do odłączonego Hive,
+- **czujnik pulsu** (`sensor.ha_heartbeat`, co 5 minut) dla botowego sprawdzenia „Home Assistant
+  stoi”,
 - **archiwum logu rdzenia Home Assistanta** po każdym restarcie — jedyny sposób, by zobaczyć,
   co działo się przed awarią.
 
@@ -237,6 +268,29 @@ W październiku 2026 Hive zmienił swoją stronę logowania i integracja Hive w 
 aktualizacja do **2026.10.3 lub nowszej** (zawiera `pyhive-integration` 1.0.10). Termostat
 w tym czasie działa sam na ostatnich ustawieniach, ale Home Assistant nie może nim sterować
 ani go logować.
+
+**Co dokładnie mierzy `/ogrzewanie`?** Żądanie ciepła zgłaszane przez sam Hive: atrybut
+`hvac_action` encji climate (w API Hive `working`). To sygnał sterowania, nie czas palenia kotła,
+zużycie gazu ani temperatura grzejników. Integracja Hive ma też
+`binary_sensor.thermostat_1_state`, ale to tylko *temperatura bieżąca < zadana*, więc gubi
+żądanie ciepła przy temperaturze równej lub wyższej od nastawy — w prawdziwej instalacji pokazał
+3 h 31 min tam, gdzie Hive zgłosił 8 h 18 min w ciągu dwóch dób. Podobnie CWU „włączona” znaczy,
+że zasobnik może się grzać, a nie że kocioł pali cały czas.
+
+**Dlaczego bot czasem pisze „dane za 49% czasu”?** Brak historii to stan nieznany, nigdy
+„wyłączone” ani zero. Bot wykrywa stany `unavailable`/`unknown` i przerwy w pracy samego Home
+Assistanta (z wpisów `started`/`stopped` w dzienniku; po awarii — od ostatniego śladu życia przed
+restartem). Nie wykryje chmury Hive, która po cichu przestała przysyłać zmiany, choć integracja
+wygląda na zdrową: Hive zgłasza tylko zmiany, więc wygląda to tak samo jak spokojny dom.
+
+**Kto mi powie, że cały serwer jest wyłączony?** Nic w domu: zanik prądu wyłącza naraz Home
+Assistanta, bota i jego watchdog w cronie. Ustaw `BOT_PING_URL` na zewnętrzny serwis typu
+„dead-man's switch”; bot pinguje go co 5 minut, gdy wszystko jest w porządku, a serwis alarmuje,
+gdy pingi ustaną. Po starcie bot dodatkowo pisze, jak długo go nie było.
+
+**Dlaczego `hotwater.csv` ma wiersze z pięcioma i z trzema kolumnami?** Od 2.1.0 pakiet zapisuje
+wynik każdego przełączenia ciepłej wody: `czas,zdarzenie,źródło,wynik,stan_hive`. Starsze wiersze
+mają tylko trzy pierwsze — a stary wpis `ON` to wysłane polecenie, nie dowód, że Hive je wykonał.
 
 **Ile to oszczędza gazu?** Nie wiadomo i ten projekt nie będzie udawał, że wie. Bez odczytu
 licznika gazu każda liczba byłaby wymyślona. Uczciwe stwierdzenie jest takie: Boost przestaje

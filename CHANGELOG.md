@@ -3,6 +3,66 @@
 All notable changes to this project are documented here.
 This project follows [Semantic Versioning](https://semver.org/).
 
+## [2.1.0] - 2026-11-12
+
+### Added
+- **Home Assistant heartbeat.** The heating package adds `sensor.ha_heartbeat`, rewritten every
+  5 minutes. The bot warns when it stops (Home Assistant answers its API but no automation runs —
+  the hot-water schedule included) and when the newest tick never reaches the history (the
+  recorder stopped saving). Both alert after `BOT_HEARTBEAT_MAX_MIN` (20) minutes, once per
+  outage, with a recovery message. `BOT_ENTITY_HEARTBEAT=off` turns it off.
+- **External dead-man's switch** (`BOT_PING_URL`, optional, recommended). The bot pings it every
+  5 minutes only while Home Assistant answers, ticks and saves history; the outside service
+  alerts when the pings stop. This is the only layer that sees a power cut of the whole machine.
+  The address is treated as a secret: never logged or shown.
+- **Downtime report after a start.** The bot leaves a sign of life every 5 minutes; after a
+  start it reports a silence longer than `BOT_HEARTBEAT_MAX_MIN`, with the Home Assistant
+  outages the logbook shows in that time.
+- `/status`, `/health` and `--check` show the heartbeat, history recording and ping state.
+
+### Fixed
+- **`hotwater.csv` logged switches that never happened.** The package wrote ON/OFF right after
+  calling the service, so while Hive was unavailable it kept logging a schedule nobody carried
+  out (more than two weeks of such rows on the author's install). A new script, `script.hw_set_and_log`, sends
+  the command exactly as before, waits up to 2.5 minutes for Hive to report the requested state
+  and logs `confirmed`, `not_confirmed` or `hive_unavailable` plus the state Hive reported; a
+  failure also goes to the logbook. The schedule, the restart reconciliation and the legionella
+  cycle all use it. Control behaviour is unchanged.
+- The hot water Boost logger no longer records `BOOST_off`/`BOOST_on` when Hive merely comes back
+  from `unavailable`.
+
+## [2.0.3] - 2026-11-12
+
+_Not released on its own: these fixes ship in 2.1.0._
+
+### Fixed
+- **Heating time was undercounted.** `/heating`, `/today`, the last run and `/temperature` read
+  `binary_sensor.thermostat_1_state`, which the Hive integration (pyhive 1.0.9 and 1.0.10)
+  computes as *current temperature < target* — not as Hive's call for heat. On a live install
+  it gave 3 h 31 min for two days where Hive reported 8 h 18 min. The bot now uses the climate
+  entity's `hvac_action` attribute (`working` in the Hive API), with full attribute history and
+  `last_updated` stamps, since that attribute changes while the climate state does not. It is
+  still a control signal, and the replies say so: not boiler firing, gas or radiator temperature.
+- **Missing data was shown as "off" or zero.** No history, `unavailable` and `unknown` are now
+  unknown time: left out of totals, with the coverage shown ("data for 49% of the time", "no
+  data" for a day). Home Assistant's own outages are read from the logbook (`stopped`/`started`;
+  after a crash or power cut, from the last sign of life before the restart), so an old value is
+  no longer carried through them. Temperature min/max/average skip unknown time too.
+- A short `unavailable` blip inside a run (`BOT_GAP_STITCH_MIN`) still joins the run for display,
+  but its minutes are no longer counted as heating; the line says "+2 min without data".
+- **The alert no longer diagnoses a leaking valve.** The hint fired whenever the binary sensor was
+  not `on` while hot water was on — including unknown states and real heat demand. The alert now
+  gives facts only: Hive's call for heat now, hot water control, and the last 3 hours of
+  temperature, call for heat and hot water control with coverage.
+- Hot water "on" is described as *control on*, not continuous heating, in both languages.
+- Comparisons and day boundaries are done in UTC, so the repeated hour of the autumn clock change
+  sorts and splits correctly.
+- The "reading has not changed" notice is information, not a fault (`ℹ️`), and `/status` shows
+  "reading last changed" instead of "sensor data older than".
+
+### Removed
+- `BOT_ENTITY_HEATING_STATE`. If it is still set, the bot logs that it is ignored.
+
 ## [2.0.2] - 2026-11-09
 
 ### Documentation
@@ -84,6 +144,7 @@ No code changes apart from the version string.
 Initial public version: the dynamic Boost automation (`automations.yaml`) and a README.
 Tagged on 2026-09-18 as a rollback point before the 2.0.0 work started.
 
+[2.1.0]: https://github.com/popek1990/hive-dynamic-boost-control-home-assistant/releases/tag/v2.1.0
 [2.0.2]: https://github.com/popek1990/hive-dynamic-boost-control-home-assistant/releases/tag/v2.0.2
 [2.0.1]: https://github.com/popek1990/hive-dynamic-boost-control-home-assistant/releases/tag/v2.0.1
 [2.0.0]: https://github.com/popek1990/hive-dynamic-boost-control-home-assistant/releases/tag/v2.0.0

@@ -5,10 +5,10 @@ This makes Boost last only as long as the house actually needs, logs every press
 sends you a Telegram message when the house is too warm.**
 
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
-![Home Assistant](https://img.shields.io/badge/Home%20Assistant-tested%20on%202026.10-41BDF5?logo=homeassistant&logoColor=white)
+![Home Assistant](https://img.shields.io/badge/Home%20Assistant-tested%20on%202026.10%20and%202026.11-41BDF5?logo=homeassistant&logoColor=white)
 ![Python](https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white)
 ![Dependencies](https://img.shields.io/badge/dependencies-none-success)
-![Tests](https://img.shields.io/badge/tests-82%20passing-success)
+![Tests](https://img.shields.io/badge/tests-138%20passing-success)
 
 [Why](#why-this-exists) · [What you get](#what-you-get) · [See it](#see-it) ·
 [How it fits together](#how-it-fits-together) · [Quick start](#quick-start) ·
@@ -58,6 +58,12 @@ every minute), commands for the numbers you actually want, a health check that t
 Home Assistant or the Hive cloud stops answering, and a systemd unit so it comes back after a
 reboot. Standard library only: no pip install, no virtualenv, no container.
 
+**Watchdogs for every layer** — Home Assistant not answering, Home Assistant answering but stuck
+(a heartbeat sensor stops ticking), history no longer being saved, the bot itself dead, and —
+through an optional dead-man's switch outside the house — the whole server losing power. On the
+author's install the whole server was off for two days and nobody was told; now the outside
+service would page you within your chosen grace period, and the bot reports the gap when it comes back.
+
 Its watchdog thresholds are measured, not guessed: because Hive only reports a value when it
 changes, a steady house is indistinguishable from a silent sensor, so the "stale reading" warning
 waits 8 hours by default — on 30 days of real data, 45 minutes would have fired 87 times in one
@@ -75,18 +81,31 @@ Real output from the bot, on made-up numbers:
 🌡 Right now
 Temperature: 23.2 °C   (alert threshold 23.0 °C)
 Thermostat target: 21.0 °C
-Radiators: HEATING (Hive action: heating)
+Heating: Hive is calling for heat
 Heating mode: schedule
-Hot water: on
-Reading from: 18:26 (4 min ago)
+Hot water: control on
+Last change of the reading: 18:26 (4 min ago)
 ```
 
 ```text
 🔥 Heating — today (Wednesday 14.01)
 
-Total: 1 h 25 min in 2 periods
+Call for heat: 1 h 25 min in 2 periods
   • 06:30 – 07:12  (42 min)
   • 17:05 – 17:48  (43 min)
+
+ℹ️ Counted from Hive's call for heat (climate hvac_action). That is a control signal: not boiler firing time, gas use or radiator temperature.
+```
+
+When part of the day has no data, the bot says so instead of reporting zero:
+
+```text
+🔥 Heating — today (Wednesday 14.01)
+
+Call for heat: 42 min in 1 period
+  • 06:30 – 07:12  (42 min)
+⚠️ Data for 9 h 10 min of 18 h 30 min (49%). The total covers the known time only.
+Home Assistant was not running: 14.01 07:20–16:40. Old values are not counted for that time.
 ```
 
 ```text
@@ -106,9 +125,10 @@ An alert, with the context that makes it useful:
 House: 23.4 °C   (threshold 23.0 °C)
 Time: 18:30
 Thermostat target: 21.0 °C
-Radiators: not heating
-Hot water: on
-ℹ️ The radiators are not being called for and the house is still warming up — that looks like a leaking valve.
+Heating: Hive is not calling for heat (hvac_action: idle)
+Hot water: control on
+Last 3 h: 22.6 → 23.4 °C; call for heat 0 min; hot water control on 3 h 00 min.
+ℹ️ These are the recorded facts, not a diagnosis: a rise in temperature has many possible causes.
 ```
 
 ```text
@@ -116,10 +136,10 @@ Hot water: on
 
 Temperature: now 22.8 °C
   min 21.4 °C (00:00), max 23.2 °C (15:00), average 22.03 °C
-Radiators: 1 h 25 min in 2 periods
+Heating, call for heat: 1 h 25 min in 2 periods
 Heating Boosts: 1
 Hot water Boosts: 1
-Hot water on for: 13 h 30 min
+Hot water, control on: 13 h 30 min
 Temperature alerts today: 2
 ```
 
@@ -135,6 +155,8 @@ flowchart LR
     HA -->|"REST API, read only"| Bot["hive_bot.py (systemd)"]
     Bot -->|alerts and replies| Tg["Telegram"]
     Cron["cron watchdog"] -->|/health| Bot
+    HA -->|"heartbeat every 5 min"| Bot
+    Bot -->|"ping while all is well"| Ext["dead-man's switch (optional, off-site)"]
 ```
 
 The automation is the only part that changes anything. The bot only reads.
@@ -196,6 +218,10 @@ systemctl status hive-bot --no-pager
 sudo -u hivebot crontab -l 2>/dev/null | { cat; echo "*/15 * * * * /opt/hive-bot/watchdog.sh"; } | sudo -u hivebot crontab -
 ```
 
+Strongly recommended: set `BOT_PING_URL` to a check at a dead-man's-switch service such as
+[healthchecks.io](https://healthchecks.io). It is the only thing that can tell you the whole
+machine is off. Details: [telegram-bot/README.md#watchdogs](telegram-bot/README.md#watchdogs).
+
 Then send `/start` to your bot. `--check` verifies the Home Assistant token, every entity,
 the history endpoint (which `/heating` and `/boosts` depend on) and the Telegram token, and
 tells you what is wrong in plain words if something is not right.
@@ -210,12 +236,12 @@ curl -s http://127.0.0.1:8099/health
 
 | Command | What it answers |
 |---|---|
-| `/temperature` | temperature now, thermostat target, whether radiators are hot, hot water, reading age |
-| `/heating` | how long the radiators ran today, period by period (`/heating 7` for a week) |
+| `/temperature` | temperature now, thermostat target, whether Hive is calling for heat, hot water control, reading age |
+| `/heating` | how long Hive called for heat today, period by period, with data coverage (`/heating 7` for a week) |
 | `/boosts` | every Boost with its time, length and the temperature it started at (`/boosts 7`) |
-| `/water` | hot water state, today's windows, your schedule in words |
+| `/water` | hot water control, today's windows, your schedule in words |
 | `/today` | one screen: min/max/average temperature, heating, Boosts, hot water, alerts |
-| `/status` | bot health, uptime, link to Home Assistant, sensor age, threshold, mute state |
+| `/status` | bot health, uptime, link to Home Assistant, sensor age, heartbeat, external ping, threshold, mute state |
 | `/threshold 23` | show or change the alert threshold |
 | `/mute 120` | silence alerts for 120 minutes (1–1440) |
 | `/unmute` | alerts back on |
@@ -236,7 +262,11 @@ independent of the Boost automation:
 - a **weekly legionella cycle** (Sunday 02:00–04:00) that survives any saving you do elsewhere,
 - **reconciliation after a restart**, so a reboot mid-window does not leave the boiler guessing,
 - **CSV loggers**: temperature every 15 minutes, hot water events, thermostat changes with the
-  user who made them,
+  user who made them. Each scheduled hot water switch records whether Hive **confirmed** it
+  (`confirmed`, `not_confirmed`, `hive_unavailable`), instead of logging ON/OFF the moment the
+  command is sent — which used to log more than two weeks of switches a disconnected Hive never got,
+- a **heartbeat sensor** (`sensor.ha_heartbeat`, every 5 minutes) for the bot's
+  "Home Assistant is stuck" check,
 - an **archive of the Home Assistant core log** after each restart, which is the only way to
   see what happened before a crash.
 
@@ -288,6 +318,31 @@ shows `Failed to get login info: Expecting value: line 1 column 20 (char 19)`. R
 Assistant or reloading the integration does not help; updating to **2026.10.3 or newer** does
 (it ships `pyhive-integration` 1.0.10). The thermostat keeps running on its last settings in the
 meantime, but nothing in Home Assistant can control or log it.
+
+**What exactly does `/heating` measure?** Hive's own call for heat: the `hvac_action`
+attribute of the climate entity (`working` in the Hive API). It is a control signal, not boiler
+firing time, gas use or radiator temperature. The Hive integration also has
+`binary_sensor.thermostat_1_state`, but that one is only *current temperature < target*, so it
+misses heat demand at or above the target — on a real install it showed 3 h 31 min where Hive
+reported 8 h 18 min over two days. Hot water "on" likewise means the cylinder is allowed to heat,
+not that the boiler fires the whole time.
+
+**Why does the bot sometimes say "data for 49% of the time"?** Missing history is reported as
+unknown, never as "off" or zero. The bot detects `unavailable`/`unknown` states and Home
+Assistant's own outages (from the `started`/`stopped` logbook entries; after a crash, from the
+last sign of life before the restart). It cannot detect a Hive cloud that silently stops sending
+updates while the integration still looks healthy: Hive only reports changes, so that looks the
+same as a steady house.
+
+**Who tells me when the whole server is off?** Nothing inside the house can: a power cut takes
+Home Assistant, the bot and its cron watchdog down together. Set `BOT_PING_URL` to a
+dead-man's-switch service; the bot pings it every 5 minutes while all is well, and the service
+alerts you when the pings stop. On restart the bot also tells you how long it was gone.
+
+**Why does `hotwater.csv` have rows with five columns and rows with three?** Since 2.1.0 the
+package logs the outcome of each hot water switch: `time,event,trigger,result,hive_state`.
+Older rows have only the first three — and an old `ON` row is a command that was sent, not
+proof that Hive carried it out.
 
 **How much gas does it save?** Unknown, and this project will not pretend otherwise. Saving
 depends on your house, your boiler and how often Boost was being abused. Without a gas meter

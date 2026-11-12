@@ -15,7 +15,7 @@ Assistant; nothing here changes your heating.
 | `.env.example` | configuration template — copy to `.env` |
 | `hive-bot.service` | systemd unit (user `hivebot`, `/opt/hive-bot`) |
 | `watchdog.sh` | cron check that alerts if the bot itself stops answering |
-| `tests/` | 82 tests, no dependencies, no network |
+| `tests/` | 138 tests, no dependencies, no network |
 
 ## Install
 
@@ -44,6 +44,9 @@ ones worth knowing:
 | `BOT_REPEAT_MIN` | `180` | reminder while still too warm; `0` disables reminders. |
 | `BOT_STALE_SENSOR_MIN` | `480` | warn when the reading has not changed for this long - see below. |
 | `BOT_GAP_STITCH_MIN` | `5` | Hive drops out for a minute or two; gaps shorter than this count as one run. |
+| `BOT_PING_URL` | empty | **Recommended.** A dead-man's-switch address outside your house — see Watchdogs. |
+| `BOT_HEARTBEAT_MAX_MIN` | `20` | how long the Home Assistant heartbeat may stand still (minimum 10). |
+| `BOT_ENTITY_HEARTBEAT` | `sensor.ha_heartbeat` | the heartbeat from the heating package; `off` stops watching it. |
 | `BOT_ENTITY_*` | Hive defaults | if your entity ids differ. |
 | `BOT_HW_SCHEDULE_TEXT` | empty | your hot-water window in words, shown by `/water`. |
 
@@ -57,21 +60,66 @@ One message when the temperature crosses the threshold — not one per poll. It 
 the temperature drops by the hysteresis, so a reading hovering on the line does not spam you.
 While it stays above, you get a reminder every `BOT_REPEAT_MIN` minutes.
 
-The alert carries context: the thermostat target, whether the radiators are actually hot, and
-whether hot water is heating. If the house is warming up while the radiators are **not** being
-called for, the bot says so — that pattern usually means heat is leaking into the heating
-circuit, which is worth knowing before you blame the thermostat.
+The alert carries context: the thermostat target, whether Hive is calling for heat right now
+(climate `hvac_action`), hot water control, and how the last 3 hours went — temperature from
+→ to, minutes of call for heat and of hot water control, each with its data coverage. It states
+facts, not a diagnosis: a single reading and the hot-water state cannot tell a fault from
+sunshine, cooking or a full house.
+
+## What the numbers mean
+
+- **Heating** time is Hive's own call for heat: the `hvac_action` attribute of
+  `BOT_ENTITY_CLIMATE`, read with its `last_updated` stamps (the state stays `heat` while the
+  attribute changes). It is a control signal — not boiler firing, gas or radiator temperature.
+  `binary_sensor.thermostat_1_state` is not used: the integration computes it as
+  *current < target*, so it misses demand at or above the target.
+- **Hot water** "control on" means the cylinder may heat when its own thermostat asks; it is not
+  continuous boiler firing.
+- **Missing data is unknown, never zero.** `unavailable`/`unknown`, no history, and the times when
+  Home Assistant itself was not running (logbook `stopped`/`started`; after a crash, from the
+  last sign of life before the restart) are left out of every total, and the reply says how much
+  of the period is covered. A short gap inside a run (`BOT_GAP_STITCH_MIN`) joins the run for
+  display but is not counted.
+- **Limit:** Hive only reports changes, so a Hive cloud that silently stops sending updates
+  looks the same as a steady house. The bot cannot detect that from history alone.
 
 `/mute 120` silences alerts for two hours without disarming anything: whatever happens while
 muted still alerts you afterwards if it is still too warm.
 
 ## Watchdogs
 
-The bot watches the house; two things watch the bot.
+The bot watches the house, and four layers watch the parts that can fail. Each one covers a
+failure the others cannot see:
 
-- **Its own health**: it warns you when Home Assistant stops answering for `BOT_HA_DOWN_MIN`
-  minutes, and when the temperature reading has not changed for `BOT_STALE_SENSOR_MIN` minutes —
-  the case where everything looks fine but the data is stale.
+| What fails | Who notices | How fast |
+|---|---|---|
+| Home Assistant stops answering | the bot (`BOT_HA_DOWN_MIN`) | 10 min |
+| Home Assistant answers but is stuck — no automation runs, the hot-water schedule included | the bot, from the heartbeat sensor | 20 min |
+| Home Assistant runs but stops saving history | the bot, from the heartbeat history | 20 min |
+| The bot itself dies | `watchdog.sh` from cron | 15 min |
+| **The whole machine loses power or network** | only something outside the house: `BOT_PING_URL` | your choice |
+| …and afterwards | the bot, on its next start: "not running from … to …" | at once |
+
+- **Heartbeat** — the heating package adds `sensor.ha_heartbeat`, which Home Assistant rewrites
+  every 5 minutes. If its last tick is older than `BOT_HEARTBEAT_MAX_MIN`, Home Assistant still
+  answers the API but is not running its automations. If the newest tick never reaches the
+  history (checked 3 minutes after the tick, alerting after the same 20 minutes, so a slow
+  nightly purge does not count), the recorder has stopped: every history command would show a
+  gap. The bot reads the history API, which serves only what is in the database — verified on a
+  live install: a tick is missing for the first seconds and present after the 30 s commit.
+  Without the sensor the bot logs one hint and carries on; `BOT_ENTITY_HEARTBEAT=off` silences it.
+- **External ping** — nothing in the house can report its own power cut. Create a check at a
+  dead-man's-switch service (for example [healthchecks.io](https://healthchecks.io), free tier:
+  period 5 minutes, grace 15–30 minutes, Telegram or e-mail integration) and put its ping
+  address in `BOT_PING_URL`. The bot calls it every 5 minutes **only while everything above is
+  fine**; when the calls stop — power cut, server off, network down, Home Assistant stuck — the
+  service alerts you. The address is a secret (anyone holding it can fake "all is well"), so it
+  stays in `.env` and never appears in the log, `/status` or `/health`.
+- **After an outage** the bot reports how long it was gone ("no sign of life from 03.01 02:15
+  to 04.01 09:40") and which Home Assistant outages the logbook shows in that time. It leaves a
+  sign of life every 5 minutes, so a normal restart is not reported.
+- **The temperature reading** is watched too: the bot warns when it has not changed for
+  `BOT_STALE_SENSOR_MIN` minutes — the case where everything looks fine but the data is stale.
 
   A word on that second one: Hive writes a new state **only when the value changes**, so there is
   no heartbeat to watch (`last_reported` does not move either). A quiet reading therefore means
@@ -99,12 +147,19 @@ curl -s http://127.0.0.1:8099/health
   "ha_error": null,
   "temperature_c": 22.8,
   "last_reading": "2026-01-14T18:29:11+00:00",
-  "sensor_age_min": 3.0
+  "sensor_age_min": 3.0,
+  "ha_heartbeat": "ok",
+  "ha_heartbeat_age_min": 2.1,
+  "recorder_ok": true,
+  "external_ping": "ok",
+  "last_ping": "2026-01-14T18:25:00+00:00"
 }
 ```
 
-The endpoint returns `503` when the Home Assistant link is down, so any uptime monitor can use
-it. It binds to localhost only and is not authenticated — do not proxy it to the internet.
+`ha_heartbeat` is `ok`, `stalled`, `missing` (no such entity), `unknown` (not checked yet) or
+`off`; `external_ping` is `ok`, `failing`, `held` (held back because something is wrong) or
+`off`. The endpoint returns `503` when the Home Assistant link is down, so any uptime monitor
+can use it. It binds to localhost only and is not authenticated — do not proxy it to the internet.
 
 ## Diagnostics
 
@@ -125,7 +180,8 @@ python3 -m unittest discover -s tests -t .
 
 They cover formatting in both languages, `.env` parsing, state migration, the history analysis
 (including Hive dropouts and daylight-saving changes), every command, and the alert and watchdog
-flows. Nothing touches the network.
+flows — a stuck heartbeat, a recorder that stopped, the external ping and the report after an
+outage. Nothing touches the network.
 
 ## Adding a language
 
